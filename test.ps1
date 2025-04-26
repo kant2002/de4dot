@@ -11,7 +11,7 @@ function Test($item)
 	# tests\samples\inlining\inline_static_method_new.il
 	$base = [System.IO.Path]::GetFileNameWithoutExtension($item)
 	$dir = Split-Path $item
-	mkdir -Force $dir | Out-Null
+	mkdir -Force obj\$dir | Out-Null
 	ilasm /DLL /QUIET "$item" /OUTPUT=obj\$dir\$base.dll
 
 	& $de4dotExec  obj\$dir\$base.dll -o obj\$dir\$base.cleaned.dll
