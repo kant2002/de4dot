@@ -16,6 +16,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v1
+      - uses: ChristopheLav/windows-sdk-install@v1
+        with:
+          version-sdk: 26100
+          features: 'OptionId.NetFxSoftwareDevelopmentKit'
 
       - name: Build
         shell: pwsh
