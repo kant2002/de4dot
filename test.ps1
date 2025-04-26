@@ -2,7 +2,7 @@ $Configuration="Release"
 
 mkdir obj -Force | Out-Null
 # C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64
-$env:PATH="C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64;$env:PATH"
+$env:PATH="C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64;c:\Windows\Microsoft.NET\Framework64\v4.0.30319\;$env:PATH"
 
 $de4dotExec="Release\net8.0\win-x64\de4dot.exe"
 
