@@ -23,6 +23,7 @@ jobs:
           $msbuildPath = Split-Path (& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\Current\Bin\amd64\MSBuild.exe | Select-Object -First 1) -Parent
           $env:PATH = $msbuildPath + ';' + $env:PATH
           .\build.ps1
+          .\test.ps1
 
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
