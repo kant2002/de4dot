@@ -1,0 +1,12 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageVersion Include="dnlib" Version="3.6.0" />
+    <PackageVersion Include="System.Drawing.Common" Version="8.0.8" />
+  </ItemGroup>
+
+</Project>
