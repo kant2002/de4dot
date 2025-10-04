@@ -4,6 +4,7 @@ using de4dot.code;
 using de4dot.code.AssemblyClient;
 using de4dot.code.deobfuscators;
 using dnlib.DotNet;
+using Microsoft.Extensions.AI;
 using ModelContextProtocol.Server;
 
 namespace de4dot.mcp {
@@ -14,61 +15,73 @@ namespace de4dot.mcp {
 	[McpServerToolType]
 	public sealed class ObfuscatorTool {
 		[McpServerTool(Name = "detectObfuscator"), Description("Detect obfuscator from specified DLL file")]
-		public static string DetectObfuscator(
-			McpServer thisServer,
+		public static AIContent DetectObfuscator(
+			McpServer mcpServer,
+			DeobfuscationSessionManager manager,
 			[Description("The file to detect obfuscator obfuscate")] string obfuscatedFile,
 			CancellationToken cancellationToken) {
-			return DetectDebugger(obfuscatedFile);
+			try {
+				var session = manager.GetSession(mcpServer.SessionId!);
+				var moduleContext = new ModuleContext(session.AssemblyResolver);
+				var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
+				var options = new ObfuscatedFile.Options() {
+					ControlFlowDeobfuscation = false,
+					KeepObfuscatorTypes = true,
+					Filename = obfuscatedFile,
+					StringDecrypterType = DecrypterType.None,
+				};
+				var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
+				file.DeobfuscatorContext = session.DeobfuscatorContext;
+				file.Load(CreateDeobfuscators());
+				var deob = file.Deobfuscator;
+				session.AssemblyResolver.Remove(file.ModuleDefMD);
+				return new TextContent(deob.TypeLong);
+			}
+			catch (Exception ex) {
+				return new ErrorContent(ex.Message);
+			}
 		}
 
-		static string DetectDebugger(string fileName) {
-			var moduleContext = new ModuleContext(TheAssemblyResolver.Instance);
-			var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
-			var options = new ObfuscatedFile.Options() {
-				ControlFlowDeobfuscation = false,
-				KeepObfuscatorTypes = true,
-				Filename = fileName,
-				StringDecrypterType = DecrypterType.None,
-			};
-			var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
-			var deobfuscatorContext = new DeobfuscatorContext();
-			file.DeobfuscatorContext = deobfuscatorContext;
-			file.Load(CreateDeobfuscators());
-			var deob = file.Deobfuscator;
-			TheAssemblyResolver.Instance.Remove(file.ModuleDefMD);
-			return deob.TypeLong;
-		}
 		[McpServerTool(Name = "deobfuscate"), Description("Deobfuscate from specified DLL file")]
-		public static string Deobfuscate(
-			McpServer thisServer,
+		public static AIContent Deobfuscate(
+			McpServer mcpServer,
+			DeobfuscationSessionManager manager,
 			[Description("The file to deobfuscate")] string obfuscatedFile,
-			[Description("Method to deobfuscate")] string method,
+			[Description("Method to deobfuscate")] string? method,
 			CancellationToken cancellationToken) {
-			var moduleContext = new ModuleContext(TheAssemblyResolver.Instance);
-			var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
-			var options = new ObfuscatedFile.Options() {
-				ControlFlowDeobfuscation = false,
-				KeepObfuscatorTypes = true,
-				Filename = obfuscatedFile,
-				StringDecrypterType = DecrypterType.None,
-				NewFilename = Path.ChangeExtension(obfuscatedFile, ".deobfuscate.dll"),
-			};
-			var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
-			var deobfuscatorContext = new DeobfuscatorContext();
-			file.DeobfuscatorContext = deobfuscatorContext;
-			file.Load(CreateDeobfuscators());
-			var deob = file.Deobfuscator;
-			file.DeobfuscateBegin();
-			file.Deobfuscate();
-			file.DeobfuscateEnd();
-			file.Save();
+			try {
+				var session = manager.GetSession(mcpServer.SessionId!);
+				var moduleContext = new ModuleContext(session.AssemblyResolver);
+				var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
+				var options = new ObfuscatedFile.Options() {
+					ControlFlowDeobfuscation = false,
+					KeepObfuscatorTypes = true,
+					Filename = obfuscatedFile,
+					StringDecrypterType = DecrypterType.None,
+					NewFilename = Path.ChangeExtension(obfuscatedFile, ".deobfuscate.dll"),
+				};
+				var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
+				file.DeobfuscatorContext = session.DeobfuscatorContext;
+				file.Load(CreateDeobfuscator(method));
+				var deob = file.Deobfuscator;
+				file.DeobfuscateBegin();
+				file.Deobfuscate();
+				file.DeobfuscateEnd();
+				file.Save();
 
-			TheAssemblyResolver.Instance.Remove(file.ModuleDefMD);
-			return options.NewFilename;
+				session.AssemblyResolver.Remove(file.ModuleDefMD);
+				return new TextContent(options.NewFilename);
+			} catch (Exception ex) {
+				return new ErrorContent(ex.Message);
+			}
 		}
 
 		static IList<IDeobfuscator> CreateDeobfuscators() {
 			return [.. CreateDeobfuscatorInfos().Select(_ => _.CreateDeobfuscator())];
+		}
+
+		static IList<IDeobfuscator> CreateDeobfuscator(string? longName) {
+			return [.. CreateDeobfuscatorInfos().Select(_ => _.CreateDeobfuscator()).Where(_ => _.TypeLong == longName || _.Name == longName || _.Type == longName || longName == null)];
 		}
 
 		static IList<IDeobfuscatorInfo> CreateDeobfuscatorInfos() {
