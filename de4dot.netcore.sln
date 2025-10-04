@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.26228.4
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.11018.127 d18.0
 MinimumVisualStudioVersion = 15.0.26206.0
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "de4dot.code", "de4dot.code\de4dot.code.csproj", "{4D10B9EB-3BF1-4D61-A389-CB019E8C9622}"
 EndProject
@@ -18,6 +18,14 @@ EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "de4dot.cui", "de4dot.cui\de4dot.cui.csproj", "{879E4A7E-C320-42D2-8275-4F1E44CE64AA}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "de4dot.mdecrypt", "de4dot.mdecrypt\de4dot.mdecrypt.csproj", "{5C93C5E2-196F-4877-BF65-96FEBFCEFCA1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "de4dot.mcp", "de4dot.mcp\de4dot.mcp.csproj", "{8EDB4C45-71C9-442D-A64A-0C4C255489C8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8D34BC03-EB0E-496B-9532-6506AB57D88A}"
+	ProjectSection(SolutionItems) = preProject
+		De4DotCommon.props = De4DotCommon.props
+		Directory.Packages.props = Directory.Packages.props
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -135,6 +143,22 @@ Global
 		{5C93C5E2-196F-4877-BF65-96FEBFCEFCA1}.Release|Mixed Platforms.Build.0 = Release|Any CPU
 		{5C93C5E2-196F-4877-BF65-96FEBFCEFCA1}.Release|Win32.ActiveCfg = Release|Any CPU
 		{5C93C5E2-196F-4877-BF65-96FEBFCEFCA1}.Release|x86.ActiveCfg = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Win32.ActiveCfg = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|Win32.Build.0 = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Debug|x86.Build.0 = Debug|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Mixed Platforms.Build.0 = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Win32.ActiveCfg = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|Win32.Build.0 = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|x86.ActiveCfg = Release|Any CPU
+		{8EDB4C45-71C9-442D-A64A-0C4C255489C8}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
