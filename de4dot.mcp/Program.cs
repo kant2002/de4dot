@@ -1,14 +1,13 @@
 using de4dot.mcp;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddMcpServer()
-	.WithStdioServerTransport()
+	.WithHttpTransport()
 	.WithTools<ObfuscatorTool>();
-builder.Logging.AddConsole(consoleLogOptions => {
-	// Configure all logs to go to stderr
-	consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
-});
+builder.Services.AddSingleton<DeobfuscationSessionManager>();
 
 var app = builder.Build();
+app.UseHttpsRedirection();
+app.MapMcp();
 
 await app.RunAsync();
