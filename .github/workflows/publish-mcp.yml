@@ -1,0 +1,23 @@
+name: Publish MCP Docker Image to GHCR
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v1
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        shell: pwsh
+        run: |
+          dotnet publish de4dot.mcp/de4dot.mcp.csproj --os linux --arch x64 -f net8.0 /t:PublishContainer -p ContainerRegistry=ghcr.io -p ContainerRepository=kant2002/de4dot/mcp `
+            -p ContainerImageTags='"latest;0.0.1-${{ env.GITHUB_SHA }}"'
