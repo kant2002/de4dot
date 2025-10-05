@@ -7,9 +7,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishAot>false</PublishAot>
     <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
     <ContainerRepository>codevision/de4dotmcp</ContainerRepository>
-    <ContainerFamily>alpine</ContainerFamily>
+    <!-- For some reason alpine image -->
+    <!--<ContainerFamily>alpine</ContainerFamily>-->
     <RuntimeIdentifiers>linux-x64;linux-arm64</RuntimeIdentifiers>
 
   </PropertyGroup>
