@@ -306,11 +306,19 @@ namespace de4dot.code {
 		}
 
 		public void Save() {
-			Logger.n("Saving {0}", options.NewFilename);
+			Logger.n("Saving module {0}", options.NewFilename);
 			var mdFlags = GetMetadataFlags();
 			if (!options.ControlFlowDeobfuscation)
 				mdFlags |= MetadataFlags.KeepOldMaxStack;
 			assemblyModule.Save(options.NewFilename, mdFlags, new PrintNewTokens(module, deob as IModuleWriterListener));
+		}
+
+		public void Save(Stream destinationStream) {
+			Logger.n($"Saving module to stream");
+			var mdFlags = GetMetadataFlags();
+			if (!options.ControlFlowDeobfuscation)
+				mdFlags |= MetadataFlags.KeepOldMaxStack;
+			assemblyModule.Save(destinationStream, mdFlags, new PrintNewTokens(module, deob as IModuleWriterListener));
 		}
 
 		IList<MethodDef> GetAllMethods() {
