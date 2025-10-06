@@ -17,6 +17,7 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System.IO;
 using dnlib.DotNet;
 using dnlib.DotNet.Writer;
 
@@ -69,6 +70,25 @@ namespace de4dot.code {
 				writerOptions.KeepExtraPEData = true;
 				writerOptions.KeepWin32Resources = true;
 				module.NativeWrite(newFilename, writerOptions);
+			}
+		}
+
+		public void Save(Stream destinationStream, MetadataFlags mdFlags, IModuleWriterListener writerListener) {
+			if (module.IsILOnly) {
+				var writerOptions = new ModuleWriterOptions(module);
+				writerOptions.WriterEvent += (s, e) => writerListener?.OnWriterEvent(e.Writer, e.Event);
+				writerOptions.MetadataOptions.Flags |= mdFlags;
+				writerOptions.Logger = Logger.Instance;
+				module.Write(destinationStream, writerOptions);
+			}
+			else {
+				var writerOptions = new NativeModuleWriterOptions(module, optimizeImageSize: true);
+				writerOptions.WriterEvent += (s, e) => writerListener?.OnWriterEvent(e.Writer, e.Event);
+				writerOptions.MetadataOptions.Flags |= mdFlags;
+				writerOptions.Logger = Logger.Instance;
+				writerOptions.KeepExtraPEData = true;
+				writerOptions.KeepWin32Resources = true;
+				module.NativeWrite(destinationStream, writerOptions);
 			}
 		}
 

@@ -5,6 +5,7 @@ using de4dot.code.AssemblyClient;
 using de4dot.code.deobfuscators;
 using dnlib.DotNet;
 using Microsoft.Extensions.AI;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace de4dot.mcp {
@@ -15,41 +16,13 @@ namespace de4dot.mcp {
 	[McpServerToolType]
 	public sealed class ObfuscatorTool {
 		[McpServerTool(Name = "detectObfuscator"), Description("Detect obfuscator from specified DLL file")]
-		public static AIContent DetectObfuscator(
+		public static async Task<AIContent> DetectObfuscator(
 			McpServer mcpServer,
 			DeobfuscationSessionManager manager,
 			[Description("The file to detect obfuscator obfuscate")] string obfuscatedFile,
 			CancellationToken cancellationToken) {
 			try {
-				var session = manager.GetSession(mcpServer.SessionId!);
-				var moduleContext = new ModuleContext(session.AssemblyResolver);
-				var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
-				var options = new ObfuscatedFile.Options() {
-					ControlFlowDeobfuscation = false,
-					KeepObfuscatorTypes = true,
-					Filename = obfuscatedFile,
-					StringDecrypterType = DecrypterType.None,
-				};
-				var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
-				file.DeobfuscatorContext = session.DeobfuscatorContext;
-				file.Load(CreateDeobfuscators());
-				var deob = file.Deobfuscator;
-				session.AssemblyResolver.Remove(file.ModuleDefMD);
-				return new TextContent(deob.TypeLong);
-			}
-			catch (Exception ex) {
-				return new ErrorContent(ex.Message);
-			}
-		}
-
-		[McpServerTool(Name = "deobfuscate"), Description("Deobfuscate from specified DLL file")]
-		public static AIContent Deobfuscate(
-			McpServer mcpServer,
-			DeobfuscationSessionManager manager,
-			[Description("The file to deobfuscate")] string obfuscatedFile,
-			[Description("Method to deobfuscate")] string? method,
-			CancellationToken cancellationToken) {
-			try {
+				//mcpServer.ElicitAsync<ObfuscatedFileResource>(cancellationToken).Wait(cancellationToken);
 				var session = manager.GetSession(mcpServer.SessionId!);
 				var moduleContext = new ModuleContext(session.AssemblyResolver);
 				var assemblyClientFactory = new NewAppDomainAssemblyClientFactory();
@@ -62,17 +35,53 @@ namespace de4dot.mcp {
 				};
 				var file = new ObfuscatedFile(options, moduleContext, assemblyClientFactory);
 				file.DeobfuscatorContext = session.DeobfuscatorContext;
+				file.Load(CreateDeobfuscators());
+				var deob = file.Deobfuscator;
+				session.File = file;
+				await mcpServer.SendNotificationAsync("notifications/resources/list_changed");
+				return new TextContent(deob.TypeLong);
+			}
+			catch (Exception ex) {
+				return new ErrorContent(ex.Message);
+			}
+		}
+
+		[McpServerTool(Name = "deobfuscate"), Description("Deobfuscate current file using given method")]
+		public static async Task<AIContent> Deobfuscate(
+			McpServer mcpServer,
+			DeobfuscationSessionManager manager,
+			[Description("Method to deobfuscate")] string? method,
+			CancellationToken cancellationToken) {
+			try {
+				var session = manager.GetSession(mcpServer.SessionId!);
+				var file = session.File;
+				file.DeobfuscatorContext = session.DeobfuscatorContext;
 				file.Load(CreateDeobfuscator(method));
 				var deob = file.Deobfuscator;
 				file.DeobfuscateBegin();
 				file.Deobfuscate();
 				file.DeobfuscateEnd();
-				file.Save();
-
-				session.AssemblyResolver.Remove(file.ModuleDefMD);
-				return new TextContent(options.NewFilename);
+				await mcpServer.SendNotificationAsync("notifications/resources/list_changed");
+				//session.AssemblyResolver.Remove(file.ModuleDefMD);
+				return new TextContent(file.NewFilename);
 			} catch (Exception ex) {
 				return new ErrorContent(ex.Message);
+			}
+		}
+
+		[McpServerTool(Name = "saveDeobfuscated"), Description("Return deobfuscated file")]
+		public static CallToolResult SaveDeobfuscated(
+			McpServer mcpServer,
+			DeobfuscationSessionManager manager,
+			CancellationToken cancellationToken) {
+			try {
+				var session = manager.GetSession(mcpServer.SessionId!);
+				var file = session.File;
+				var fileName = Path.GetFileName(file.NewFilename);
+				return new CallToolResult() { IsError = true, Content = [new ResourceLinkBlock() { Name = fileName, Uri = $"de4dot://files/{fileName}" }] };
+			}
+			catch (Exception ex) {
+				return new CallToolResult() { IsError = true, Content = [new TextContentBlock() { Text = ex.Message }] };
 			}
 		}
 
