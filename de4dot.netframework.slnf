@@ -1,0 +1,22 @@
+{
+  "solution": {
+    "path": "de4dot.slnx",
+    "projects": [
+      "AssemblyData\\AssemblyData.csproj",
+      "AssemblyServer-CLR20-x64\\AssemblyServer-CLR20-x64.csproj",
+      "AssemblyServer-CLR20\\AssemblyServer-CLR20.csproj",
+      "AssemblyServer-CLR40-x64\\AssemblyServer-CLR40-x64.csproj",
+      "AssemblyServer-CLR40\\AssemblyServer-CLR40.csproj",
+      "AssemblyServer-x64\\AssemblyServer-x64.csproj",
+      "AssemblyServer\\AssemblyServer.csproj",
+      "Test.Rename.Dll\\Test.Rename.Dll.csproj",
+      "Test.Rename\\Test.Rename.csproj",
+      "de4dot-x64\\de4dot-x64.csproj",
+      "de4dot.blocks\\de4dot.blocks.csproj",
+      "de4dot.code\\de4dot.code.csproj",
+      "de4dot.cui\\de4dot.cui.csproj",
+      "de4dot.mdecrypt\\de4dot.mdecrypt.csproj",
+      "de4dot\\de4dot.csproj"
+    ]
+  }
+}
