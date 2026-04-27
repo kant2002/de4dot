@@ -1,0 +1,33 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="Mixed Platforms" />
+    <Platform Name="Win32" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path=".github/workflows/build.yml" />
+    <File Path=".github/workflows/publish-mcp.yml" />
+    <File Path="build.ps1" />
+    <File Path="De4DotCommon.props" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Packages.props" />
+    <File Path="test.ps1" />
+  </Folder>
+  <Project Path="AssemblyData/AssemblyData.csproj" />
+  <Project Path="AssemblyServer-CLR20-x64/AssemblyServer-CLR20-x64.csproj" />
+  <Project Path="AssemblyServer-CLR20/AssemblyServer-CLR20.csproj" />
+  <Project Path="AssemblyServer-CLR40-x64/AssemblyServer-CLR40-x64.csproj" />
+  <Project Path="AssemblyServer-CLR40/AssemblyServer-CLR40.csproj" />
+  <Project Path="AssemblyServer-x64/AssemblyServer-x64.csproj" />
+  <Project Path="AssemblyServer/AssemblyServer.csproj" />
+  <Project Path="de4dot-x64/de4dot-x64.csproj" />
+  <Project Path="de4dot.blocks/de4dot.blocks.csproj" >
+  <Project Path="de4dot.code/de4dot.code.csproj" />
+  <Project Path="de4dot.cui/de4dot.cui.csproj" />
+  <Project Path="de4dot.mcp/de4dot.mcp.csproj" />
+  <Project Path="de4dot.mdecrypt/de4dot.mdecrypt.csproj" />
+  <Project Path="de4dot/de4dot.csproj" />
+  <Project Path="Test.Rename.Dll/Test.Rename.Dll.csproj" />
+  <Project Path="Test.Rename/Test.Rename.csproj" />
+</Solution>

@@ -1,8 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <Import Project="..\De4DotCommon.props" />
-
   <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
