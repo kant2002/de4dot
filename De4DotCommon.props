@@ -12,7 +12,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)\de4dot.snk</AssemblyOriginatorKeyFile>
-    <VersionPrefix>3.2.0</VersionPrefix>
+    <VersionPrefix>3.3.0</VersionPrefix>
     <Copyright>Copyright (C) 2011-2018 de4dot@gmail.com</Copyright>
     <OutputPath>$(MSBuildThisFileDirectory)\$(Configuration)</OutputPath>
     <DisableOutOfProcTaskHost>true</DisableOutOfProcTaskHost>
