@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-dotnet build -c Release -f net48 de4dot.sln
+dotnet build -c Release -f net48 de4dot.slnx
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 Remove-Item Release\net48\*.pdb, Release\net48\*.xml, Release\net48\Test.Rename.*
 
