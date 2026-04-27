@@ -23,10 +23,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "de4dot.mcp", "de4dot.mcp\de
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8D34BC03-EB0E-496B-9532-6506AB57D88A}"
 	ProjectSection(SolutionItems) = preProject
+		build.ps1 = build.ps1
 		.github\workflows\build.yml = .github\workflows\build.yml
 		De4DotCommon.props = De4DotCommon.props
 		Directory.Packages.props = Directory.Packages.props
 		.github\workflows\publish-mcp.yml = .github\workflows\publish-mcp.yml
+		test.ps1 = test.ps1
 	EndProjectSection
 EndProject
 Global

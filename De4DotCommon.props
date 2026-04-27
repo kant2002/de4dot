@@ -5,7 +5,7 @@
     <De4DotNetFramework Condition=" '$(SolutionName)' == 'de4dot.netframework' ">true</De4DotNetFramework>
     <!-- Two different sln files are used because some of the projects are only available when targetting .NET Framework -->
     <TargetFrameworks Condition=" '$(De4DotNetFramework)' == 'true' ">net48</TargetFrameworks>
-    <TargetFrameworks Condition=" '$(De4DotNetFramework)' != 'true' ">net8.0</TargetFrameworks>
+    <TargetFrameworks Condition=" '$(De4DotNetFramework)' != 'true' ">net10.0</TargetFrameworks>
     <Features>strict</Features>
     <LangVersion>latest</LangVersion>
     <SignAssembly>true</SignAssembly>
@@ -16,8 +16,6 @@
     <Copyright>Copyright (C) 2011-2018 de4dot@gmail.com</Copyright>
     <OutputPath>$(MSBuildThisFileDirectory)\$(Configuration)</OutputPath>
     <DisableOutOfProcTaskHost>true</DisableOutOfProcTaskHost>
-
-    <DnlibVersion>3.5.0</DnlibVersion>
   </PropertyGroup>
 
 </Project>

@@ -40,5 +40,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
         with:
-          name: de4dot-net8.0
-          path: publish-net8.0
+          name: de4dot-net10.0
+          path: publish-net10.0
