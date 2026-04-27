@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
-VisualStudioVersion = 18.0.11018.127 d18.0
+VisualStudioVersion = 18.0.11018.127
 MinimumVisualStudioVersion = 15.0.26206.0
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "de4dot.code", "de4dot.code\de4dot.code.csproj", "{4D10B9EB-3BF1-4D61-A389-CB019E8C9622}"
 EndProject
@@ -23,8 +23,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "de4dot.mcp", "de4dot.mcp\de
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8D34BC03-EB0E-496B-9532-6506AB57D88A}"
 	ProjectSection(SolutionItems) = preProject
+		.github\workflows\build.yml = .github\workflows\build.yml
 		De4DotCommon.props = De4DotCommon.props
 		Directory.Packages.props = Directory.Packages.props
+		.github\workflows\publish-mcp.yml = .github\workflows\publish-mcp.yml
 	EndProjectSection
 EndProject
 Global
