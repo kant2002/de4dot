@@ -22,7 +22,7 @@
   <Project Path="AssemblyServer-x64/AssemblyServer-x64.csproj" />
   <Project Path="AssemblyServer/AssemblyServer.csproj" />
   <Project Path="de4dot-x64/de4dot-x64.csproj" />
-  <Project Path="de4dot.blocks/de4dot.blocks.csproj" >
+  <Project Path="de4dot.blocks/de4dot.blocks.csproj" />
   <Project Path="de4dot.code/de4dot.code.csproj" />
   <Project Path="de4dot.cui/de4dot.cui.csproj" />
   <Project Path="de4dot.mcp/de4dot.mcp.csproj" />
