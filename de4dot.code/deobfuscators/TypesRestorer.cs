@@ -58,6 +58,9 @@ namespace de4dot.code.deobfuscators {
 			public TypeSig newType = null;
 			public T arg;
 			bool newobjTypes;
+			// Set when a write to this field/arg has an undeterminable value type. When true the
+			// collected types are only a partial view, so narrowing would produce invalid IL.
+			public bool hasUnknownWrite;
 
 			public Dictionary<TypeSig, bool> Types => types;
 			public TypeInfo(T arg) => this.arg = arg;
@@ -446,8 +449,10 @@ namespace de4dot.code.deobfuscators {
 		}
 
 		bool DeobfuscateFields() {
-			foreach (var info in fieldWrites.Values)
+			foreach (var info in fieldWrites.Values) {
 				info.Clear();
+				info.hasUnknownWrite = false;
+			}
 
 			foreach (var method in allMethods) {
 				if (method.Body == null)
@@ -468,8 +473,14 @@ namespace de4dot.code.deobfuscators {
 							continue;
 						bool wasNewobj;
 						fieldType = GetLoadedType(info.arg.DeclaringType, method, instructions, i, out wasNewobj);
-						if (fieldType == null)
+						if (fieldType == null) {
+							// A write whose value type we cannot determine (e.g. a boxed value type
+							// stored into an object field). Narrowing on the writes we CAN type would
+							// wrongly conclude the field is that single type and break the untyped
+							// writes (invalid IL). Mark the field as not-narrowable.
+							info.hasUnknownWrite = true;
 							continue;
+						}
 						info.Add(fieldType, wasNewobj);
 						break;
 
@@ -516,6 +527,8 @@ namespace de4dot.code.deobfuscators {
 			bool modified = false;
 			var removeThese = new List<FieldDef>();
 			foreach (var info in fieldWrites.Values) {
+				if (info.hasUnknownWrite)
+					continue;
 				if (info.UpdateNewType(module)) {
 					removeThese.Add(info.arg);
 					GetUpdatedField(info.arg).newFieldType = info.newType;

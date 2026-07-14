@@ -391,6 +391,8 @@ namespace de4dot.blocks.cflow {
 		public static Int64Value Shl(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
 			int shift = b.Value;
@@ -400,6 +402,8 @@ namespace de4dot.blocks.cflow {
 
 		public static Int64Value Shr(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
+				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
 				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
@@ -412,6 +416,8 @@ namespace de4dot.blocks.cflow {
 
 		public static Int64Value Shr_Un(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
+				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
 				return CreateUnknown();
 			if (b.Value == 0)
 				return a;

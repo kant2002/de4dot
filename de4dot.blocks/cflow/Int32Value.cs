@@ -455,6 +455,11 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shl(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			// Out-of-range counts (incl. nonzero multiples of 32) are undefined in CIL and would
+			// fabricate an all-bits-valid mask below (C# masks the count, turning `32 - shift`
+			// into 0). Stay conservative, matching pre-refactor behavior.
+			if ((uint)b.Value >= sizeof(int) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
 			int shift = b.Value;
@@ -464,6 +469,8 @@ namespace de4dot.blocks.cflow {
 
 		public static Int32Value Shr(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
+				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(int) * 8)
 				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
@@ -476,6 +483,8 @@ namespace de4dot.blocks.cflow {
 
 		public static Int32Value Shr_Un(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
+				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(int) * 8)
 				return CreateUnknown();
 			if (b.Value == 0)
 				return a;

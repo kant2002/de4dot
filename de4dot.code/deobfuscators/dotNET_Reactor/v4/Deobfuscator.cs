@@ -700,8 +700,16 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				Logger.v("Could not remove decrypter type");
 
 			FixEntryPoint();
+			CleanDisplayClasses();
 
 			base.DeobfuscateEnd();
+		}
+
+		void CleanDisplayClasses() {
+			var cleaner = new DisplayClassCleaner(module);
+			cleaner.Find();
+			AddFieldsToBeRemoved(cleaner.FieldsToRemove, "Reactor-injected DisplayClass static field");
+			AddMethodsToBeRemoved(cleaner.MethodsToRemove, "Reactor-injected DisplayClass null-check method");
 		}
 
 		void FixEntryPoint() {

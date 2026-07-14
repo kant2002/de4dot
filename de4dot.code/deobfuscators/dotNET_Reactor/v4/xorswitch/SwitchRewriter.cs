@@ -31,7 +31,10 @@ static class SwitchRewriter {
 		int applied = 0;
 
 		foreach (var edge in edges) {
-			// Self-loop guard: never redirect a block to itself
+			// Self-loop guard: never redirect a block to itself. A basic block has no
+			// internal branch, so retaining some payload does not help — `payload; br self`
+			// still loops forever. Leaving the edge unresolved yields a recoverable goto
+			// instead of a bogus infinite loop.
 			if (edge.Target == edge.Predecessor)
 				continue;
 

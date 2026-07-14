@@ -189,15 +189,17 @@ class EdgeResolver {
 		}
 
 		var indirectResolved = new HashSet<Block>();
+		Dictionary<int, int> caseStateVar = null;
+		HashSet<int> allSeeds = null;
 
 		// Phases 2-5 with fixed-point iteration (requires stateVar)
 		if (_dispatch.StateVar is not null) {
-			var caseStateVar = new Dictionary<int, int>();
+			caseStateVar = new Dictionary<int, int>();
 			foreach (var edge in edges.Where(edge => edge.TargetIncomingStateVar.HasValue))
 			{
 				caseStateVar[edge.CaseIndex] = edge.TargetIncomingStateVar.Value;
 			}
-			var allSeeds = new HashSet<int>(caseStateVar.Values);
+			allSeeds = new HashSet<int>(caseStateVar.Values);
 
 			int maxOuterIter = _dispatch.CaseTargets.Count * 3;
 			for (int outerIter = 0; outerIter < maxOuterIter; outerIter++) {
@@ -342,6 +344,46 @@ class EdgeResolver {
 				// Phase 5: Algebraic seed extraction
 				RunAlgebraicSeedExtraction(caseStateVar, allSeeds);
 
+				// Phase 6: Forward propagation within cases
+				// For unresolved blocks at a case with known seed, trace stateVar
+				// through the case's code to find the actual value at the block
+				{
+					foreach (var pred in GetDispatchPredecessors()) {
+						if (resolved.Contains(pred))
+							continue;
+						if (pred.LastInstr.OpCode.Code == Code.Switch)
+							continue;
+						if (!IsUnconditionalPredecessor(pred))
+							continue;
+
+						if (!_dispatch.BlockToCase.TryGetValue(pred, out int predCaseIdx))
+							continue;
+						if (!caseStateVar.TryGetValue(predCaseIdx, out int caseSeed))
+							continue;
+
+						// The case seed didn't work in Phase 2, meaning stateVar was
+						// modified within the case. Trace forward from the case target
+						// to find the actual stateVar value at this block.
+						var derivedSeed = TraceStateVarForward(
+							_dispatch.CaseTargets[predCaseIdx], pred, caseSeed);
+						if (derivedSeed is null)
+							continue;
+
+						var edge = TryResolveEdge(pred, derivedSeed.Value, seedIsAtPredecessorEntry: true);
+						if (edge is not null) {
+							edges.Add(edge.Value);
+							resolved.Add(pred);
+							ResolvedCount++;
+
+							if (edge.Value.TargetIncomingStateVar.HasValue) {
+								int newSeed = edge.Value.TargetIncomingStateVar.Value;
+								caseStateVar[edge.Value.CaseIndex] = newSeed;
+								allSeeds.Add(newSeed);
+							}
+						}
+					}
+				}
+
 				// Break if neither edges nor seeds grew
 				if (edges.Count == prevEdgeCount && allSeeds.Count == prevSeedCount)
 					break;
@@ -459,10 +501,17 @@ class EdgeResolver {
 		return chain;
 	}
 
-	ResolvedEdge? TryResolveEdge(Block predecessor, int? seedStateVar = null) {
+	ResolvedEdge? TryResolveEdge(Block predecessor, int? seedStateVar = null, bool seedIsAtPredecessorEntry = false) {
 		var predInstrs = predecessor.Instructions;
 
-		var chain = BuildEmulationChain(predecessor);
+		// When the caller already knows the stateVar value at the predecessor's own entry
+		// (e.g. Phase 6's forward trace from the case target), emulate only the predecessor.
+		// Building the backward chain here would re-emulate the preceding blocks and apply
+		// their stateVar updates a second time on top of the already-derived seed, producing
+		// an in-range but wrong case index.
+		var chain = seedIsAtPredecessorEntry
+			? new List<Block> { predecessor }
+			: BuildEmulationChain(predecessor);
 
 		var emu = CreateEmulator(seedStateVar, chain[0].Sources.Count == 0);
 
@@ -688,6 +737,263 @@ class EdgeResolver {
 		};
 	}
 
+	// --- Phase 6: Forward stateVar tracing ---
+
+	/// <summary>
+	///     Traces the stateVar value forward from a case target to a specific
+	///     dispatch predecessor block using block-by-block isolated analysis.
+	///     For each block in the path: tries algebraic extraction first, then
+	///     falls back to isolated emulation (which is resilient to calls/field
+	///     loads that produce unknowns on the stack but don't affect locals).
+	///     Returns the stateVar value at the predecessor's entry, or null if
+	///     the path can't be found or stateVar becomes undeterminable.
+	/// </summary>
+	int? TraceStateVarForward(Block caseTarget, Block targetPred, int caseSeed) {
+		if (_dispatch.StateVar is null)
+			return null;
+
+		var path = FindSimplePath(caseTarget, targetPred);
+		if (path is null)
+			return null;
+
+		int currentSeed = caseSeed;
+
+		// Track stateVar block-by-block through the path (excluding targetPred)
+		for (int i = 0; i < path.Count - 1; i++) {
+			var block = path[i];
+
+			// Fast check: if block doesn't store to stateVar, skip it entirely
+			if (!BlockWritesToLocal(block, _dispatch.StateVar))
+				continue;
+
+			// Try algebraic extraction (handles: ldloc V_7; ldc A; mul; ldc B; xor)
+			var affine = ExtractAffineUpdate(block, _dispatch.StateVar, _blocks.Locals);
+			if (affine is not null) {
+				var (mulConst, xorConst) = affine.Value;
+				currentSeed = unchecked((int)(((uint)currentSeed * (uint)mulConst) ^ (uint)xorConst));
+				continue;
+			}
+
+			// Fallback: isolated emulation of this single block.
+			// This handles non-standard patterns (e.g., ldc C; stloc V_7, or
+			// ldloc V_7; ldc A; xor without mul) as long as the state update
+			// only depends on stateVar and constants (not stack values from
+			// previous blocks, which would appear as unknowns).
+			var newSeed = EmulateBlockForStateVar(block, currentSeed);
+			if (newSeed is not null) {
+				currentSeed = newSeed.Value;
+				continue;
+			}
+
+			// Can't determine stateVar after this block
+			return null;
+		}
+
+		return currentSeed;
+	}
+
+	/// <summary>
+	///     Checks if a block contains any stloc instruction targeting the given local.
+	/// </summary>
+	bool BlockWritesToLocal(Block block, Local local) {
+		foreach (var instr in block.Instructions) {
+			if (instr.IsStloc() && Instr.GetLocalVar(_blocks.Locals, instr) == local)
+				return true;
+		}
+		return false;
+	}
+
+	/// <summary>
+	///     Emulates a single block in isolation to determine the stateVar value after it.
+	///     Starts with a fresh emulator seeded with the current stateVar value and an
+	///     empty stack. This is resilient to calls/field loads in the block because
+	///     they produce unknowns only on the stack, not in locals. Only fails when
+	///     the state update depends on stack values from previous blocks.
+	/// </summary>
+	int? EmulateBlockForStateVar(Block block, int currentSeed) {
+		var emu = new InstructionEmulator();
+		emu.Initialize(_method, false);
+		emu.SetLocal(_dispatch.StateVar, new Int32Value(currentSeed));
+
+		try {
+			var instrs = block.Instructions;
+			int end = instrs.Count;
+			// Skip trailing branches (they only affect control flow, not locals)
+			while (end > 0 && (instrs[end - 1].IsBr() || instrs[end - 1].IsConditionalBranch()))
+				end--;
+			emu.Emulate(instrs, 0, end);
+		}
+		catch {
+			return null;
+		}
+
+		var sv = emu.GetLocal(_dispatch.StateVar);
+		if (sv is Int32Value svIv && svIv.AllBitsValid())
+			return svIv.Value;
+		return null;
+	}
+
+	/// <summary>
+	///     Finds a simple path from start to target via BFS. Returns null if
+	///     no path exists within 30 blocks or if the path is ambiguous.
+	/// </summary>
+	List<Block> FindSimplePath(Block start, Block target) {
+		if (start == target)
+			return new List<Block> { start };
+
+		const int maxBlocks = 100;
+		var parent = new Dictionary<Block, Block>();
+		var queue = new Queue<Block>();
+		queue.Enqueue(start);
+		parent[start] = null;
+		int visited = 0;
+
+		while (queue.Count > 0 && visited < maxBlocks) {
+			var block = queue.Dequeue();
+			visited++;
+
+			foreach (var succ in block.GetTargets()) {
+				if (IsDispatchBlock(succ))
+					continue;
+				if (parent.ContainsKey(succ))
+					continue;
+
+				parent[succ] = block;
+
+				if (succ == target) {
+					// Reconstruct path
+					var path = new List<Block>();
+					var cur = target;
+					while (cur is not null) {
+						path.Add(cur);
+						cur = parent[cur];
+					}
+					path.Reverse();
+					return path;
+				}
+
+				queue.Enqueue(succ);
+			}
+		}
+
+		return null;
+	}
+
+	/// <summary>
+	///     Derives the next-case seed and case index by tracing stateVar from a case
+	///     target to a dispatch predecessor. Tries two approaches:
+	///     1. Block-by-block stateVar tracing (resilient to calls/field loads) + isolated
+	///        dispatch emulation
+	///     2. Full path emulation (handles stack-based patterns where xor constants come
+	///        from previous blocks on the stack)
+	/// </summary>
+	(int seed, int caseIdx)? TryEmulateForSeed(Block caseTarget, Block dispatchPred, int caseSeed, int srcCaseIdx = -1) {
+		if (_dispatch.StateVar is null)
+			return null;
+
+		// Approach 1: Block-by-block stateVar tracing + isolated dispatch emulation.
+		// This handles cases where intermediate blocks have calls/field loads that
+		// produce unknowns on the stack, as long as the stateVar update only depends
+		// on stateVar and constants.
+		int? stateAtEntry = TraceStateVarForward(caseTarget, dispatchPred, caseSeed);
+		if (stateAtEntry is not null) {
+			var result = EmulateDispatchPredAndDispatch(dispatchPred, stateAtEntry.Value);
+			if (result is not null)
+				return result;
+		}
+
+		// Approach 2: Full path emulation (handles stack-based xor patterns where
+		// the xor constant is pushed by an earlier block and consumed by the dispatch
+		// predecessor via the stack).
+		return FullPathEmulateForSeed(caseTarget, dispatchPred, caseSeed, srcCaseIdx);
+	}
+
+	/// <summary>
+	///     Emulates a dispatch predecessor block and the dispatch blocks with the
+	///     given stateVar seed. Returns the derived seed and case index.
+	/// </summary>
+	(int seed, int caseIdx)? EmulateDispatchPredAndDispatch(Block dispatchPred, int stateVarSeed) {
+		var emu = new InstructionEmulator();
+		emu.Initialize(_method, false);
+		emu.SetLocal(_dispatch.StateVar, new Int32Value(stateVarSeed));
+
+		try {
+			var instrs = dispatchPred.Instructions;
+			int end = instrs.Count;
+			if (end > 0 && instrs[end - 1].IsBr())
+				end--;
+			emu.Emulate(instrs, 0, end);
+			EmulateDispatchBlocks(emu, dispatchPred, out _);
+		}
+		catch {
+			return null;
+		}
+
+		if (emu.StackSize() < 1)
+			return null;
+
+		var tos = emu.Pop();
+		if (tos is not Int32Value iv || !iv.AllBitsValid())
+			return null;
+
+		int caseIdx = iv.Value;
+		if (caseIdx < 0 || caseIdx >= _dispatch.CaseTargets.Count)
+			return null;
+
+		var sv = emu.GetLocal(_dispatch.StateVar);
+		if (sv is not Int32Value svIv || !svIv.AllBitsValid())
+			return null;
+
+		return (svIv.Value, caseIdx);
+	}
+
+	/// <summary>
+	///     Full-path emulation from case target to dispatch predecessor. This handles
+	///     stack-based patterns (e.g., xor constant pushed at case entry, consumed at
+	///     dispatch predecessor) but fails when intermediate blocks have calls that
+	///     corrupt the stack with unknowns.
+	/// </summary>
+	(int seed, int caseIdx)? FullPathEmulateForSeed(Block caseTarget, Block dispatchPred, int caseSeed, int srcCaseIdx = -1) {
+		var path = FindSimplePath(caseTarget, dispatchPred);
+		if (path is null)
+			return null;
+
+		var emu = new InstructionEmulator();
+		emu.Initialize(_method, false);
+		emu.SetLocal(_dispatch.StateVar, new Int32Value(caseSeed));
+
+		try {
+			foreach (var block in path) {
+				var instrs = block.Instructions;
+				int end = instrs.Count;
+				if (end > 0 && instrs[end - 1].IsBr())
+					end--;
+				emu.Emulate(instrs, 0, end);
+			}
+			EmulateDispatchBlocks(emu, dispatchPred, out _);
+		}
+		catch {
+			return null;
+		}
+
+		if (emu.StackSize() < 1)
+			return null;
+
+		var tos = emu.Pop();
+		if (tos is not Int32Value iv || !iv.AllBitsValid())
+			return null;
+
+		int caseIdx = iv.Value;
+		if (caseIdx < 0 || caseIdx >= _dispatch.CaseTargets.Count)
+			return null;
+
+		var sv = emu.GetLocal(_dispatch.StateVar);
+		if (sv is not Int32Value svIv || !svIv.AllBitsValid())
+			return null;
+
+		return (svIv.Value, caseIdx);
+	}
+
 	// --- Phase 5: Algebraic seed extraction ---
 
 	/// <summary>
@@ -741,20 +1047,35 @@ class EdgeResolver {
 				}
 
 				if (isDispatchPred) {
+					int? nextSeed = null;
+					int? nextCase = null;
+
+					// Try algebraic extraction first (fast path)
 					var affine = ExtractAffineUpdate(block, _dispatch.StateVar, _blocks.Locals);
 					if (affine is not null) {
 						var (mulConst, xorConst) = affine.Value;
 						uint nextSeedU = unchecked(((uint)seed * (uint)mulConst) ^ (uint)xorConst ^ (uint)xorKey);
-						int nextSeed = (int)nextSeedU;
-						int nextCase = (int)(nextSeedU % (uint)modulus);
+						nextSeed = (int)nextSeedU;
+						nextCase = (int)(nextSeedU % (uint)modulus);
+					}
 
-						if (nextCase < _dispatch.CaseTargets.Count) {
-							if (!derivedSeeds.TryGetValue(nextCase, out var seedSet)) {
-								seedSet = [];
-								derivedSeeds[nextCase] = seedSet;
-							}
-							seedSet.Add(nextSeed);
+					// Fallback: emulation-based seed derivation
+					// Handles non-standard patterns (stack-based xor, split constants)
+					if (nextSeed is null) {
+						var emuResult = TryEmulateForSeed(caseTarget, block, seed, caseIdx);
+						if (emuResult is not null) {
+							nextSeed = emuResult.Value.seed;
+							nextCase = emuResult.Value.caseIdx;
 						}
+					}
+
+					if (nextSeed is not null && nextCase is not null &&
+						nextCase.Value >= 0 && nextCase.Value < _dispatch.CaseTargets.Count) {
+						if (!derivedSeeds.TryGetValue(nextCase.Value, out var seedSet)) {
+							seedSet = [];
+							derivedSeeds[nextCase.Value] = seedSet;
+						}
+						seedSet.Add(nextSeed.Value);
 					}
 				}
 
