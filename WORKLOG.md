@@ -7,7 +7,7 @@ v6.x assemblies — **S1**, **S2** (smaller), **S3** (large); not in this repo.
 
 `realBug` = de4dot-**introduced** invalid-IL methods (via `ilverify`) that involve a **plugin-internal
 type**, i.e. genuine de4dot bugs after filtering SDK/runtime version-mismatch false positives. See
-IMPROVEMENT_PLAN.md → "Correctness methodology". **Current baseline: realBug = 2/2/1 (S1/S2/S3);
+IMPROVEMENT_PLAN.md → "Correctness methodology". **Current baseline: realBug = 0/0/1 (S1/S2/S3);
 never raise it.**
 
 > **Baseline corrected 2026-07-29.** The old "6/6/0" figure was measured with an **incomplete
@@ -15,6 +15,7 @@ never raise it.**
 > missing dependency under-counts rather than over-counts. Re-measured against a complete, checked-in
 > reference set the true pre-fix baseline was **17/17/1**, not 6/6/0 — 9 real errors per small sample
 > were being hidden as "expected third-party noise". Task #4 below then took it to **2/2/1**.
+> Task #4b then took it to **0/0/1**.
 > Lesson: never treat a `FileLoadErrorGeneric` as benign noise; it means the numbers next to it are
 > undercounts. Assemble a complete reference set *first*, then measure.
 
@@ -61,11 +62,31 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
   Verified: 997 methods before and after (deletes nothing), zero empty bodies, S3 unaffected (0 stubs
   matched), and the decompiled C# goes from `((Type)this).GetMethod(...)` on a static class to the
   obviously-correct `type_0.GetMethod(def, pol)`.
-- [ ] **4b. Remaining realBug (2/2/1): `MissingMethod` on display-class/state-machine members.**
-  Both remaining small-sample errors are dangling references to members of `<>c__DisplayClass*` /
-  async state machines (e.g. `Boolean <>c__DisplayClass19_0<!0>.DeleteIterator(Object, Object)`),
-  plus 1 pre-existing unrelated error in S3. Related to item 3's `DisplayClassCleaner`; may be a
-  remaining edge case in `PruneReferencedRemovals` or a different root cause. Not yet investigated.
+- [x] **4b. `MissingMethod` dangling refs — FIXED (realBug 2/2/1 → 0/0/1).** DONE.
+  Live methods were being deleted as "Inlined method" while still referenced.
+  ROOT CAUSE: `DotNetUtils.GetMethod2(ModuleDef, IMethod)` could not resolve a call to a method on a
+  **generic instantiation of a type in this module**. Such a call is a `MemberRef` whose
+  `DeclaringType` is a `TypeSpec` (e.g. `C`1<!T>::M(...)`). The scope type resolves to the correct
+  `TypeDef` and `FindMethod(name)` finds the method — but `FindMethod(name, MethodSig)` does **not**
+  match that MemberRef's signature, so the lookup returned null. Confirmed by instrumentation:
+  `scopeIsTypeDef=True sameModule=True findByName=True findBySig=False`.
+  `UnusedMethodsFinder` uses that lookup to decide whether a candidate is still referenced, so every
+  such call site was invisible → the callee looked unused → deleted → dangling `MemberRef`. de4dot
+  even logged its own `ERROR: Could not resolve MethodRef ... (0A...)` at write time; those were
+  being ignored.
+  FIX: `GetMethod2` now asks dnlib to resolve the reference (`ResolveMethodDef()`, also unwrapping
+  `MethodSpec`) before falling back to the scope-type + signature lookup. Shared utility, so it
+  helps every deobfuscator that reasons about whether a method is still called.
+  Verified: 22 previously-deleted-but-referenced methods now retained on S2, zero empty bodies, type
+  count unchanged, and de4dot's own dangling-MethodRef errors drop to 0 on all three samples.
+- [ ] **4c. Last remaining error (S3 only): `DelegateCtor` from a degraded generic argument.**
+  `ControllerEditor::AwakeMapper` builds `newobj Action`1<object>::.ctor(object, native int)` over
+  `ldftn void ShowAsContextPost(GenericMenu)` — a delegate whose generic argument has been degraded
+  to `object` while the target method still takes the concrete type, so the delegate ctor doesn't
+  verify. The enclosing call is `SpecificationAlgo::NewReg<object>(Action<!!0>)`, i.e. the generic
+  *method* instantiation lost its real type argument too (should almost certainly be `GenericMenu`).
+  Likely `TypesRestorer` or generic-argument inference over-widening to `object`. Not investigated;
+  this is the only error left in the corpus and is a different bug class from 4/4b.
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").

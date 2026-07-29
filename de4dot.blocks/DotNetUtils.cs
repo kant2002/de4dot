@@ -200,6 +200,21 @@ namespace de4dot.blocks {
 		public static MethodDef? GetMethod2(ModuleDef module, IMethod? method) {
 			if (method == null)
 				return null;
+			if (method is MethodDef md)
+				return md;
+
+			// A call to a method on a *generic instantiation* of a type in this module is encoded as a
+			// MemberRef whose DeclaringType is a TypeSpec (e.g. `C`1<!T>::M(...)`). The scope type
+			// resolves to the right TypeDef, but TypeDef.FindMethod(name, sig) does not match such a
+			// MemberRef's signature, so the plain lookup below returns null and the callee looks
+			// unreferenced. Callers use this to decide whether a method is still used, so a false null
+			// here gets live methods deleted, leaving dangling MemberRefs. Ask dnlib to resolve the
+			// reference properly first.
+			var resolved = (method as IMethodDefOrRef)?.ResolveMethodDef()
+				?? ((method as MethodSpec)?.Method as IMethodDefOrRef)?.ResolveMethodDef();
+			if (resolved != null && resolved.Module == module)
+				return resolved;
+
 			return GetMethod(module, method, method.DeclaringType.ScopeType);
 		}
 
