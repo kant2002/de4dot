@@ -701,8 +701,21 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 
 			FixEntryPoint();
 			CleanDisplayClasses();
+			FixFakeInstanceStubs();
 
 			base.DeobfuscateEnd();
+		}
+
+		// Must run after ProxyCallFixer: the fake-instance stubs only become recognizable once their
+		// proxy dispatcher call has been resolved back to the real target method.
+		void FixFakeInstanceStubs() {
+			var fixer = new FakeInstanceStubFixer(module);
+			int count = fixer.Fix();
+			if (count > 0) {
+				Logger.v("Converted {0} fake-instance proxy stub(s) to static", count);
+				foreach (var method in fixer.FixedMethods)
+					Logger.v("  {0}", Utils.RemoveNewlines(method));
+			}
 		}
 
 		void CleanDisplayClasses() {

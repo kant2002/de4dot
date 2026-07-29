@@ -7,9 +7,16 @@ v6.x assemblies — **S1**, **S2** (smaller), **S3** (large); not in this repo.
 
 `realBug` = de4dot-**introduced** invalid-IL methods (via `ilverify`) that involve a **plugin-internal
 type**, i.e. genuine de4dot bugs after filtering SDK/runtime version-mismatch false positives. See
-IMPROVEMENT_PLAN.md → "Correctness methodology". **Honest baseline: realBug = 6/6/0 (S1/S2/S3); never
-raise it.** de4dot *fixes* ~396/397/100 more than it introduces. Raw absolute ilverify counts are
-~99% version noise — never use them.
+IMPROVEMENT_PLAN.md → "Correctness methodology". **Current baseline: realBug = 2/2/1 (S1/S2/S3);
+never raise it.**
+
+> **Baseline corrected 2026-07-29.** The old "6/6/0" figure was measured with an **incomplete
+> reference-assembly set**. `ilverify` *silently skips* any method it cannot fully resolve, so a
+> missing dependency under-counts rather than over-counts. Re-measured against a complete, checked-in
+> reference set the true pre-fix baseline was **17/17/1**, not 6/6/0 — 9 real errors per small sample
+> were being hidden as "expected third-party noise". Task #4 below then took it to **2/2/1**.
+> Lesson: never treat a `FileLoadErrorGeneric` as benign noise; it means the numbers next to it are
+> undercounts. Assemble a complete reference set *first*, then measure.
 
 Also gate on `emptyM` (empty method bodies = deleted live code) and stack underflows: both must stay
 at baseline. `dispatch`/`infLoop`/goto are readability signals and are DELETION-GAMEABLE — a drop can
@@ -29,21 +36,36 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
 - [x] **3. DisplayClassCleaner hardening** — `PruneReferencedRemovals` (fixpoint reference check: never
   remove a member still referenced by remaining code) + tightened the null-check-guard pattern to a
   pure-guard body. Defensive (findings were latent on this corpus); no regression. DONE.
-- [ ] **4. Reflection-proxy type confusion — the ONLY remaining real IL-bug class (realBug 6/6/0).**
-  6 methods in each smaller sample, 0 in the large one. All `StackUnexpected`.
-  CONFIRMED TRANSFORM (decompiled diff): de4dot rewrites
-  `return Wrapper.Proxy(this, name, flags, binder, types, mods, delegate)`
-  → `return ((Type)this).GetMethod(name, flags, binder, types, mods)` — drops the delegate arg and
-  uses `this` (the wrapper, NOT a `System.Type`) as the receiver → unverifiable IL. The wrapper types
-  are `static`/`sealed` and NOT `System.Type` (same in original and deobf — hierarchy not broken).
-  RULED OUT: the `inlineCandidate` inliner in `ObfuscatedFile.cs` — instrumented its rewrite loop; it
-  does NOT touch these methods. A naive `IsInlineTypeSafe` guard on that inliner made it WORSE (6→8,
-  large sample 0→2) by blocking other legit proxy inlining — reverted.
-  NEXT: instrument `ProxyCallFixer` (v4; resolves Reactor delegate proxies via a token dict — the
-  trailing delegate arg fits) and the cflow method-call inliner to catch the `Proxy → GetMethod`
-  rewrite, then guard it: skip when the receiver's static type isn't assignable to the target's
-  declaring type (leaving the valid original call). Do NOT guess the pass again — identify it by
-  instrumentation first. The large sample is unaffected; de4dot is otherwise IL-correct.
+- [x] **4. Reflection-proxy type confusion — ROOT-CAUSED AND FIXED (realBug 17/17/1 → 2/2/1).** DONE.
+  **It was never a rewriting bug — the receiver type confusion is pre-existing in the obfuscated
+  input, and de4dot merely *exposed* it.** Reactor emits reflection stubs declared as `instance`
+  methods whose `this` slot does not hold an instance of the declaring type at all: it carries an
+  arbitrary receiver that obfuscated callers pass as a weakly-typed `object` argument to a *static*
+  proxy dispatcher, e.g.
+  `ldarg.0; ldarg.1; ldarg.2; ldsfld <delegate>; call static Proxy(object, string, BindingFlags, D)`.
+  That verifies fine (the receiver is only ever an `object` parameter). Once `ProxyCallFixer`
+  correctly resolves the dispatcher back to the real *instance* target, the same stack shape
+  (receiver + N args) is reinterpreted as `call instance Target::M(...)` — and the `object`-typed
+  slot silently becomes a typed `this`. Hence mirror-image errors at both the stub and every caller.
+  Confirmed by bisection (`--no-cflow-deob` and `--dont-rename` both still reproduce → not cflow, not
+  the renamer) and by direct IL diff of the original vs deobfuscated binary.
+  FIX: `de4dot.code/deobfuscators/FakeInstanceStubFixer.cs`, run from Reactor v4 `DeobfuscateEnd()`
+  *after* ProxyCallFixer. It makes such a stub honest — converts it to `static` with the receiver as
+  an explicit leading parameter typed to the target's declaring type. This needs **zero IL edits**:
+  static `arg0` occupies the old `this` slot so `ldarg` indices already line up, and call sites push
+  the identical values (receiver + N args == N+1 static args) and reference the MethodDef, so the
+  call is re-emitted against the new signature automatically.
+  GUARDED: only rewrites methods that are *already provably invalid* — requires the declaring type to
+  be non-assignable to the target's declaring type, so legitimate forwarding (a subclass calling a
+  base method, e.g. `Editor::get_target`) is untouched; ctors, virtuals, and generics are excluded.
+  Verified: 997 methods before and after (deletes nothing), zero empty bodies, S3 unaffected (0 stubs
+  matched), and the decompiled C# goes from `((Type)this).GetMethod(...)` on a static class to the
+  obviously-correct `type_0.GetMethod(def, pol)`.
+- [ ] **4b. Remaining realBug (2/2/1): `MissingMethod` on display-class/state-machine members.**
+  Both remaining small-sample errors are dangling references to members of `<>c__DisplayClass*` /
+  async state machines (e.g. `Boolean <>c__DisplayClass19_0<!0>.DeleteIterator(Object, Object)`),
+  plus 1 pre-existing unrelated error in S3. Related to item 3's `DisplayClassCleaner`; may be a
+  remaining edge case in `PruneReferencedRemovals` or a different root cause. Not yet investigated.
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").
