@@ -25,14 +25,22 @@ Getting this right required two corrections that are easy to get wrong:
    binary and counts only failing methods that **involve a plugin-internal type** — those are
    version-independent and genuinely de4dot's fault.
 
-**Honest baseline (introduced real IL bugs): 6 / 6 / 0 (S1/S2/S3).** de4dot *fixes* far more than
-it introduces (~396/397/100 fewer failing methods than the originals), and the large assembly (S3)
-comes out fully IL-correct. Raw absolute counts (hundreds per assembly) are ~99% version noise.
+**Current: realBug = 0 / 0 / 0 (S1/S2/S3)** — de4dot emits fully verifiable IL for the whole corpus.
+
+> The figure long recorded here as an "honest baseline" of 6/6/0 was itself measured with an
+> incomplete reference set, and per correction (1) above that under-counts rather than over-counts.
+> Re-measured against a complete set the true pre-fix baseline was **17/17/1**. See `WORKLOG.md`
+> items 4 / 4b / 4c for what those actually were.
 
 A scorecard drives the loop: build → deobfuscate each sample → decompile (`ilspycmd`, project mode,
 full refs) → report `realBug` (the metric above) plus readability signals (`dispatch`, `infLoop`,
-`emptyM`, goto). **Rule: no change may raise `realBug`, `emptyM`, or introduce stack underflows.**
-The readability signals are deletion-gameable — never trust a drop in them without checking `realBug`.
+`emptyM`, goto).
+
+**Rule: no change may raise `realBug` or `emptyM`, introduce stack underflows, or leave a method with
+no `ret`/`throw`/`rethrow`.** That last gate exists because `ilverify` structurally cannot see it —
+an infinite loop is perfectly type-safe IL, so `realBug` read 0 while 21 methods across the corpus
+never returned (WORKLOG #4d). Readability signals are deletion-gameable; never trust a drop in them
+without checking `realBug`.
 
 ---
 
@@ -114,13 +122,24 @@ verifies. Treat the current `realBug` baseline as the floor. Substantial, dedica
 
 ---
 
-## Code review findings (still open, defensive)
+## Code review findings — ALL ADDRESSED 2026-07-29 (WORKLOG #6)
 
-- `FindSimplePath` returns the first BFS path and never detects ambiguity (its doc claims it does);
-  a wrong stateVar seed can be derived when multiple case→pred paths differ. (`EdgeResolver`)
-- `FindSimplePath` is computed twice per `TryEmulateForSeed`; cache it.
-- The "pop TOS, validate case index, read stateVar" tail is duplicated across three methods; extract.
-- Stale `FindSimplePath` doc ("30 blocks" vs `maxBlocks = 100`).
+- ~~`FindSimplePath` returns the first BFS path and never detects ambiguity (its doc claims it
+  does)~~ — it now bails out when a second distinct predecessor can reach the target. This is a
+  **correctness** fix, not cosmetic: callers replay the path to derive a stateVar seed, so silently
+  taking whichever path BFS found first yields a wrong-but-in-range seed and therefore a wrong edge —
+  the same silent-wrongness shape as the phase-6 double-apply bug, and equally invisible to
+  `ilverify`. It now fails closed (leaves the edge unresolved).
+- ~~computed twice per `TryEmulateForSeed`~~ — memoised per (start, target) for the resolver's
+  lifetime. Safe because the CFG is not mutated while edges are being resolved.
+- ~~duplicated result tail~~ — extracted to `ReadSeedAndCaseIndex` / `ReadCaseIndex`.
+- ~~stale doc ("30 blocks" vs `maxBlocks = 100`)~~ — rewritten to describe what the method
+  actually does.
+
+Measured cost of the ambiguity guard: **+1 residual `switch` on S1 and S2, 0 on S3**, and ±3 in
+short-vs-long branch encoding. All gates unchanged (`realBug` 0/0/0, 0 non-terminating methods,
+0 empty bodies, method counts 1019/1019/2859). The large raw IL text diff is offset renumbering —
+the opcode histograms differ only in `br.s`/`brfalse.s` encoding buckets.
 
 ---
 

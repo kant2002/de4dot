@@ -135,8 +135,14 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").
-- [ ] **6. Open review findings** — FindSimplePath ambiguity + double-compute; duplicated result-tail;
-  stale doc. Quality/defensive.
+- [x] **6. Open review findings — ALL ADDRESSED.** DONE.
+  `FindSimplePath` now detects ambiguity and fails closed; it is memoised per (start, target); the
+  duplicated "pop TOS, validate case index, read stateVar" tail is extracted to
+  `ReadSeedAndCaseIndex`/`ReadCaseIndex`; the stale doc comment is rewritten.
+  The ambiguity item was mislabelled as merely defensive — it is a **correctness** fix of the same
+  silent-wrongness family as the phase-6 double-apply bug (a wrong-but-in-range seed produces a wrong
+  edge, and `ilverify` cannot see it). Cost measured, not assumed: +1 residual `switch` on S1/S2, 0 on
+  S3; every gate unchanged.
 
 ## Notes
 

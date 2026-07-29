@@ -833,11 +833,72 @@ class EdgeResolver {
 		return null;
 	}
 
+
 	/// <summary>
-	///     Finds a simple path from start to target via BFS. Returns null if
-	///     no path exists within 30 blocks or if the path is ambiguous.
+	///     Shared tail for the seed-deriving emulations: pop the switch operand off the stack,
+	///     validate it as an in-range case index, and read the resulting stateVar. Returns null if
+	///     any part is not a fully-known Int32.
+	///
+	///     Extracted because three call sites had this verbatim; a correctness fix applied to one
+	///     copy used to need applying to all of them.
+	/// </summary>
+	(int seed, int caseIdx)? ReadSeedAndCaseIndex(InstructionEmulator emu) {
+		int? caseIdx = ReadCaseIndex(emu);
+		if (caseIdx is null)
+			return null;
+
+		var sv = emu.GetLocal(_dispatch.StateVar);
+		if (sv is not Int32Value svIv || !svIv.AllBitsValid())
+			return null;
+
+		return (svIv.Value, caseIdx.Value);
+	}
+
+	/// <summary>
+	///     Pops the switch operand and validates it as an in-range case index, or null.
+	/// </summary>
+	int? ReadCaseIndex(InstructionEmulator emu) {
+		if (emu.StackSize() < 1)
+			return null;
+
+		var tos = emu.Pop();
+		if (tos is not Int32Value iv || !iv.AllBitsValid())
+			return null;
+
+		int caseIdx = iv.Value;
+		if (caseIdx < 0 || caseIdx >= _dispatch.CaseTargets.Count)
+			return null;
+		return caseIdx;
+	}
+
+	/// <summary>
+	///     Finds the unique simple path from <paramref name="start"/> to
+	///     <paramref name="target"/> via BFS, ignoring dispatch blocks.
+	///
+	///     Returns null when no path exists within <c>maxBlocks</c> visited blocks, or when the path
+	///     is <b>ambiguous</b> — i.e. more than one predecessor inside the search can reach
+	///     <paramref name="target"/>. Ambiguity matters because callers replay the path to derive a
+	///     stateVar seed: if two distinct paths reach the target and they update stateVar
+	///     differently, picking the first one BFS happens to find silently yields a wrong-but-
+	///     in-range seed, and therefore a wrong edge. That is the same failure shape as the
+	///     already-fixed phase-6 double-apply bug, so it fails closed instead.
+	///
+	///     Results are memoised per (start, target) for the lifetime of this resolver: the CFG is not
+	///     mutated while edges are being resolved, and both TraceStateVarForward and
+	///     FullPathEmulateForSeed ask for the same pair on every TryEmulateForSeed call.
 	/// </summary>
 	List<Block> FindSimplePath(Block start, Block target) {
+		var key = (start, target);
+		if (_simplePathCache.TryGetValue(key, out var cached))
+			return cached;
+		var path = FindSimplePathUncached(start, target);
+		_simplePathCache[key] = path;
+		return path;
+	}
+
+	readonly Dictionary<(Block, Block), List<Block>> _simplePathCache = new();
+
+	List<Block> FindSimplePathUncached(Block start, Block target) {
 		if (start == target)
 			return new List<Block> { start };
 
@@ -848,6 +909,8 @@ class EdgeResolver {
 		parent[start] = null;
 		int visited = 0;
 
+		List<Block> found = null;
+
 		while (queue.Count > 0 && visited < maxBlocks) {
 			var block = queue.Dequeue();
 			visited++;
@@ -855,28 +918,33 @@ class EdgeResolver {
 			foreach (var succ in block.GetTargets()) {
 				if (IsDispatchBlock(succ))
 					continue;
-				if (parent.ContainsKey(succ))
-					continue;
-
-				parent[succ] = block;
 
 				if (succ == target) {
-					// Reconstruct path
-					var path = new List<Block>();
-					var cur = target;
+					// Reconstruct the path through `block`.
+					var path = new List<Block> { target };
+					var cur = block;
 					while (cur is not null) {
 						path.Add(cur);
 						cur = parent[cur];
 					}
 					path.Reverse();
-					return path;
+
+					// A second distinct way in means the trace is not well-defined — bail out
+					// rather than guess which one the original control flow took.
+					if (found is not null)
+						return null;
+					found = path;
+					continue;
 				}
 
+				if (parent.ContainsKey(succ))
+					continue;
+				parent[succ] = block;
 				queue.Enqueue(succ);
 			}
 		}
 
-		return null;
+		return found;
 	}
 
 	/// <summary>
@@ -929,22 +997,7 @@ class EdgeResolver {
 			return null;
 		}
 
-		if (emu.StackSize() < 1)
-			return null;
-
-		var tos = emu.Pop();
-		if (tos is not Int32Value iv || !iv.AllBitsValid())
-			return null;
-
-		int caseIdx = iv.Value;
-		if (caseIdx < 0 || caseIdx >= _dispatch.CaseTargets.Count)
-			return null;
-
-		var sv = emu.GetLocal(_dispatch.StateVar);
-		if (sv is not Int32Value svIv || !svIv.AllBitsValid())
-			return null;
-
-		return (svIv.Value, caseIdx);
+		return ReadSeedAndCaseIndex(emu);
 	}
 
 	/// <summary>
@@ -976,22 +1029,7 @@ class EdgeResolver {
 			return null;
 		}
 
-		if (emu.StackSize() < 1)
-			return null;
-
-		var tos = emu.Pop();
-		if (tos is not Int32Value iv || !iv.AllBitsValid())
-			return null;
-
-		int caseIdx = iv.Value;
-		if (caseIdx < 0 || caseIdx >= _dispatch.CaseTargets.Count)
-			return null;
-
-		var sv = emu.GetLocal(_dispatch.StateVar);
-		if (sv is not Int32Value svIv || !svIv.AllBitsValid())
-			return null;
-
-		return (svIv.Value, caseIdx);
+		return ReadSeedAndCaseIndex(emu);
 	}
 
 	// --- Phase 5: Algebraic seed extraction ---
