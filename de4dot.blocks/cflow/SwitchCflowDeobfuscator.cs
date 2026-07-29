@@ -160,7 +160,9 @@ namespace de4dot.blocks.cflow {
 		bool DeobfuscateStLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-			bool modified = false;
+
+			// Collect first, validate together — see WouldOrphanMethodExit.
+			var redirects = new List<KeyValuePair<Block, Block>>();
 			foreach (var source in new List<Block>(block.Sources)) {
 				if (!IsBranchBlock(source))
 					continue;
@@ -170,8 +172,19 @@ namespace de4dot.blocks.cflow {
 				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.Pop());
 				if (target == null)
 					continue;
-				source.ReplaceLastNonBranchWithBranch(0, target);
-				source.Add(new Instr(OpCodes.Pop.ToInstruction()));
+				redirects.Add(new KeyValuePair<Block, Block>(source, target));
+			}
+
+			var overrides = new Dictionary<Block, List<Block>>();
+			foreach (var r in redirects)
+				overrides[r.Key] = new List<Block> { r.Value };
+			if (WouldOrphanMethodExit(allBlocks, overrides))
+				return false;
+
+			bool modified = false;
+			foreach (var r in redirects) {
+				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
+				r.Key.Add(new Instr(OpCodes.Pop.ToInstruction()));
 				modified = true;
 			}
 			return modified;
@@ -188,7 +201,11 @@ namespace de4dot.blocks.cflow {
 		bool DeobfuscateLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block, Local switchVariable) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-			bool modified = false;
+
+			// Decide every rewrite first, then validate them together (see WouldOrphanMethodExit):
+			// applying one at a time cannot tell that the last one orphans the method's exit.
+			var branchRedirects = new List<KeyValuePair<Block, Block>>();
+			var bccRedirects = new List<KeyValuePair<Block, Block>>();
 			foreach (var source in new List<Block>(block.Sources)) {
 				if (IsBranchBlock(source)) {
 					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
@@ -197,8 +214,7 @@ namespace de4dot.blocks.cflow {
 					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
 					if (target == null)
 						continue;
-					source.ReplaceLastNonBranchWithBranch(0, target);
-					modified = true;
+					branchRedirects.Add(new KeyValuePair<Block, Block>(source, target));
 				}
 				else if (IsBccBlock(source)) {
 					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
@@ -207,18 +223,50 @@ namespace de4dot.blocks.cflow {
 					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
 					if (target == null)
 						continue;
-					Debug.Assert(source.Targets != null);
-					if (source.Targets[0] == block) {
-						source.SetNewTarget(0, target);
-						modified = true;
-					}
-					if (source.FallThrough == block) {
-						source.SetNewFallThrough(target);
-						modified = true;
-					}
+					bccRedirects.Add(new KeyValuePair<Block, Block>(source, target));
+				}
+			}
+
+			var overrides = new Dictionary<Block, List<Block>>();
+			foreach (var r in branchRedirects)
+				overrides[r.Key] = new List<Block> { r.Value };
+			foreach (var r in bccRedirects)
+				overrides[r.Key] = SuccessorsWithBlockReplaced(r.Key, block, r.Value);
+			if (WouldOrphanMethodExit(allBlocks, overrides))
+				return false;
+
+			bool modified = false;
+			foreach (var r in branchRedirects) {
+				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
+				modified = true;
+			}
+			foreach (var r in bccRedirects) {
+				var source = r.Key;
+				Debug.Assert(source.Targets != null);
+				if (source.Targets[0] == block) {
+					source.SetNewTarget(0, r.Value);
+					modified = true;
+				}
+				if (source.FallThrough == block) {
+					source.SetNewFallThrough(r.Value);
+					modified = true;
 				}
 			}
 			return modified;
+		}
+
+		/// <summary>Successors of <paramref name="source"/> with every edge to <paramref name="oldTarget"/> pointed at <paramref name="newTarget"/>.</summary>
+		static List<Block> SuccessorsWithBlockReplaced(Block source, Block oldTarget, Block newTarget) {
+			var list = new List<Block>();
+			if (source.FallThrough != null)
+				list.Add(source.FallThrough == oldTarget ? newTarget : source.FallThrough);
+			if (source.Targets != null) {
+				foreach (var t in source.Targets) {
+					if (t != null)
+						list.Add(t == oldTarget ? newTarget : t);
+				}
+			}
+			return list;
 		}
 
 		// Switch deobfuscation when block has switch contant on TOS:
@@ -227,10 +275,68 @@ namespace de4dot.blocks.cflow {
 		//		br swblk
 		//	swblk:
 		//		switch (......)
+		/// <summary>
+		///     Would redirecting each <c>source -> target</c> leave the method with no reachable
+		///     ret/throw?
+		///
+		///     Resolving a switch redirects every source of the switch block straight to its own
+		///     target. Once the last source is redirected the switch block is unreachable, and so is
+		///     any switch target that no source resolved to — which can be the one holding the
+		///     method's only exit. Nothing notices at that point because the blocks still exist; the
+		///     dead-block cleanup on the next iteration removes them, and the method is left looping
+		///     forever. That is perfectly verifiable IL, so ilverify cannot catch it either.
+		///
+		///     Simulated on a copy of the successor map, so this is read-only. When it returns true
+		///     the caller leaves the switch alone, which is always better than silently deleting the
+		///     path to the method's exit.
+		/// </summary>
+		static bool WouldOrphanMethodExit(List<Block> allBlocks, Dictionary<Block, List<Block>> overrides) {
+			if (allBlocks.Count == 0 || overrides.Count == 0)
+				return false;
+
+			var succ = new Dictionary<Block, List<Block>>();
+			foreach (var b in allBlocks) {
+				var list = new List<Block>();
+				if (b.FallThrough != null)
+					list.Add(b.FallThrough);
+				if (b.Targets != null) {
+					foreach (var t in b.Targets)
+						if (t != null)
+							list.Add(t);
+				}
+				succ[b] = list;
+			}
+			foreach (var o in overrides)
+				succ[o.Key] = o.Value;
+
+			var seen = new HashSet<Block>();
+			var stack = new Stack<Block>();
+			stack.Push(allBlocks[0]);
+			while (stack.Count > 0) {
+				var b = stack.Pop();
+				if (!seen.Add(b))
+					continue;
+				foreach (var instr in b.Instructions) {
+					var c = instr.OpCode.Code;
+					if (c == Code.Ret || c == Code.Throw || c == Code.Rethrow)
+						return false;
+				}
+				if (succ.TryGetValue(b, out var next)) {
+					foreach (var n in next)
+						stack.Push(n);
+				}
+			}
+			return true;
+		}
+
 		bool DeobfuscateTOS(IList<Block> switchTargets, Block switchFallThrough, Block block) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-			bool modified = false;
+
+			// Decide every redirect first so they can be validated together: applying them one at a
+			// time cannot tell that the last one is the one that orphans the method's exit.
+			var redirects = new List<KeyValuePair<Block, Block>>();
+			var ldlocFallbacks = new List<Block>();
 			foreach (var source in new List<Block>(block.Sources)) {
 				if (!IsBranchBlock(source))
 					continue;
@@ -238,14 +344,25 @@ namespace de4dot.blocks.cflow {
 				instructionEmulator.Emulate(source.Instructions);
 
 				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.Pop());
-				if (target == null) {
-					modified |= DeobfuscateTos_Ldloc(switchTargets, switchFallThrough, source);
-				}
-				else {
-					source.ReplaceLastNonBranchWithBranch(0, target);
-					source.Add(new Instr(OpCodes.Pop.ToInstruction()));
-					modified = true;
-				}
+				if (target == null)
+					ldlocFallbacks.Add(source);
+				else
+					redirects.Add(new KeyValuePair<Block, Block>(source, target));
+			}
+
+			var tosOverrides = new Dictionary<Block, List<Block>>();
+			foreach (var r in redirects)
+				tosOverrides[r.Key] = new List<Block> { r.Value };
+			if (WouldOrphanMethodExit(allBlocks, tosOverrides))
+				return false;
+
+			bool modified = false;
+			foreach (var source in ldlocFallbacks)
+				modified |= DeobfuscateTos_Ldloc(switchTargets, switchFallThrough, source);
+			foreach (var r in redirects) {
+				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
+				r.Key.Add(new Instr(OpCodes.Pop.ToInstruction()));
+				modified = true;
 			}
 			return modified;
 		}
