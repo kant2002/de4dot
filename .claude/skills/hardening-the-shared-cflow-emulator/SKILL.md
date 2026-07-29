@@ -1,6 +1,6 @@
 ---
 name: hardening-the-shared-cflow-emulator
-description: Correctness checklist for de4dot.blocks' shared IL value-emulation code (Int32Value, Int64Value, InstructionEmulator, TypesRestorer) — a class of bug here silently corrupts every deobfuscator that emulates IL, not just the one you're testing against. Use before and after any change to de4dot.blocks/cflow/*.cs or TypesRestorer.cs.
+description: Correctness checklist for de4dot.blocks' shared IL value-emulation code (Int32Value, Int64Value, InstructionEmulator, TypesRestorer) — a class of bug here silently corrupts every deobfuscator that emulates IL, not just the one currently being tested. Use before and after any change to de4dot.blocks/cflow/*.cs or TypesRestorer.cs.
 ---
 
 # Hardening the Shared cflow Emulator

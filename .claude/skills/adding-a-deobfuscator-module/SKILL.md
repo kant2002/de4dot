@@ -1,6 +1,6 @@
 ---
 name: adding-a-deobfuscator-module
-description: The structural pattern for adding a new obfuscator-specific deobfuscator to de4dot, or extending an existing one — the IDeobfuscatorInfo/DeobfuscatorBase split, registration, the pipeline hooks each deobfuscator implements, and where shared vs. obfuscator-specific logic belongs. Use when adding support for a new obfuscator/packer or adding a new pass to an existing deobfuscators/<Name>/ folder.
+description: The structural pattern for adding a new obfuscator-specific deobfuscator to de4dot, or extending an existing one — the IDeobfuscatorInfo/DeobfuscatorBase split, registration, the pipeline hooks each deobfuscator implements, and where shared vs. obfuscator-specific logic belongs. Use when adding support for a new obfuscator/packer or adding a new pass to an existing per-obfuscator deobfuscators folder.
 ---
 
 # Adding or Extending a Deobfuscator Module
