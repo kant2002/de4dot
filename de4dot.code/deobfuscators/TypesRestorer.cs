@@ -35,6 +35,8 @@ namespace de4dot.code.deobfuscators {
 		Dictionary<IField, TypeInfo<FieldDef>> fieldWrites = new Dictionary<IField, TypeInfo<FieldDef>>(FieldEqualityComparer.CompareDeclaringTypes);
 		Dictionary<int, UpdatedMethod> updatedMethods = new Dictionary<int, UpdatedMethod>();
 		Dictionary<int, UpdatedField> updatedFields = new Dictionary<int, UpdatedField>();
+		// Methods whose signature is pinned by a delegate: see FindDelegateBoundMethods().
+		HashSet<MethodDef> delegateBoundMethods = new HashSet<MethodDef>();
 
 		class UpdatedMethod {
 			public int token;
@@ -122,6 +124,7 @@ namespace de4dot.code.deobfuscators {
 		public void Deobfuscate() {
 			allMethods = new List<MethodDef>();
 
+			FindDelegateBoundMethods();
 			AddAllMethods();
 			AddAllFields();
 
@@ -129,6 +132,31 @@ namespace de4dot.code.deobfuscators {
 
 			RestoreFieldTypes();
 			RestoreMethodTypes();
+		}
+
+		// Collects every method used to build a delegate (`ldftn`/`ldvirtftn` + `newobj D::.ctor`).
+		// Such a method's signature is pinned by the delegate type: narrowing a parameter from
+		// `object` to its real type is correct in isolation, but the delegate that wraps it still
+		// says `object` (e.g. `Action`1<object>`), and its type arguments are not rewritten here.
+		// The result verifies as `DelegateCtor: Unrecognized arguments for delegate .ctor`. Leaving
+		// these signatures alone keeps them consistent with the delegate, which is exactly the
+		// pre-restore state and always valid.
+		void FindDelegateBoundMethods() {
+			delegateBoundMethods.Clear();
+			foreach (var type in module.GetTypes()) {
+				foreach (var method in type.Methods) {
+					var body = method.Body;
+					if (body == null)
+						continue;
+					foreach (var instr in body.Instructions) {
+						if (instr.OpCode.Code != Code.Ldftn && instr.OpCode.Code != Code.Ldvirtftn)
+							continue;
+						var target = DotNetUtils.GetMethod2(module, instr.Operand as IMethod);
+						if (target != null)
+							delegateBoundMethods.Add(target);
+					}
+				}
+			}
 		}
 
 		void AddAllMethods() {
@@ -208,6 +236,10 @@ namespace de4dot.code.deobfuscators {
 			foreach (var method in allMethods) {
 				methodReturnInfo = new TypeInfo<Parameter>(method.Parameters.ReturnParameter);
 				DeobfuscateMethod(method);
+
+				// Its signature is pinned by a delegate type we don't rewrite — leave it as-is.
+				if (delegateBoundMethods.Contains(method))
+					continue;
 
 				if (methodReturnInfo.UpdateNewType(module)) {
 					GetUpdatedMethod(method).newReturnType = methodReturnInfo.newType;

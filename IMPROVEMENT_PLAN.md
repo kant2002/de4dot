@@ -126,13 +126,21 @@ verifies. Treat the current `realBug` baseline as the floor. Substantial, dedica
 
 ## Open work (priority order)
 
-1. **Reflection-proxy type confusion — the only remaining real IL-bug class (6/6/0).** See WORKLOG.
-   de4dot rewrites a reflection proxy `Wrapper.Proxy(this, args…, delegate)` into
-   `((Type)this).GetMethod(args…)`, using the non-`Type` wrapper as the receiver → unverifiable IL.
-   Confirmed it is **not** the `inlineCandidate` inliner (instrumented). Next: instrument
-   `ProxyCallFixer` / the cflow method-call inliner to catch the rewrite, then guard it to skip when
-   the receiver's static type isn't assignable to the target's declaring type (leaving the valid
-   original call).
+1. ~~**Reflection-proxy type confusion**~~ — **DONE 2026-07-29**, along with two further IL-bug
+   classes it was masking. `realBug` is now **0/0/0**: de4dot emits fully verifiable IL for the whole
+   corpus. See WORKLOG items 4 / 4b / 4c for root causes and fixes. Summary of what was wrong:
+   - **4** — the receiver type confusion was *pre-existing in the obfuscated input*, not introduced.
+     Reactor declares reflection stubs as `instance` methods whose `this` is really an arbitrary
+     receiver passed as an `object` argument to a static proxy dispatcher; resolving the dispatcher
+     reinterprets that slot as a typed `this`. Fixed by normalising such stubs to `static`.
+   - **4b** — `DotNetUtils.GetMethod2` could not resolve calls made through a *generic instantiation*
+     of a type in the same module, so `UnusedMethodsFinder` thought those callees were unreferenced
+     and deleted live methods, leaving dangling `MemberRef`s.
+   - **4c** — `TypesRestorer` narrowed a parameter of a method that is used to build a delegate,
+     without updating the delegate's type argument.
+   - **Also corrected the measurement itself**: the old "6/6/0" baseline was taken with an incomplete
+     reference set, and `ilverify` silently skips methods it cannot resolve. The true pre-fix
+     baseline was **17/17/1**.
 2. **Two-variable chained dispatch (Exp 4)** — see above; drives down remaining unresolved dispatches
    and dispatch-related infinite loops. Larger effort; must hold the `realBug`/`emptyM` guards.
 3. **Closure/lambda inlining** — nested `<>c__DisplayClass` closures aren't recursively inlined by the
@@ -141,6 +149,8 @@ verifies. Treat the current `realBug` baseline as the floor. Substantial, dedica
 
 ## Success metrics
 
-1. `realBug` → 0 (currently 6/6/0; only the reflection-proxy class remains).
+1. ~~`realBug` → 0~~ **ACHIEVED 2026-07-29: 0/0/0.** Measured with a complete reference set; note the
+   reference set must resolve *everything*, or `ilverify` silently skips methods and under-reports.
+   The remaining job is to hold this at zero — never let a change raise it.
 2. Zero stack underflows and no empty-method regressions (guards, already held).
 3. Fewer unresolved dispatches / dispatch-induced infinite loops (blocked on Exp 4).
