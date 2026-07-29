@@ -36,6 +36,8 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator {
 
 	public void DeobfuscateBegin(Blocks blocks) => this._blocks = blocks;
 
+
+
 	public bool Deobfuscate(List<Block> allBlocks) {
 		bool modified = false;
 		int totalDispatches = 0;
@@ -80,8 +82,9 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator {
 				continue;
 
 			// Apply resolved edges
-			int applied = SwitchRewriter.Apply(node, edges);
+			int applied = SwitchRewriter.Apply(_blocks, node, edges);
 			totalApplied += applied;
+
 
 			if (applied > 0)
 				modified = true;
@@ -93,6 +96,7 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator {
 		if (totalDispatches > 0)
 			Logger.v("  XOR-switch [{5}]: {0} dispatches, {1} edges resolved, {2} failed, {3} applied, {4} dead cases",
 				totalDispatches, totalResolved, totalFailed, totalApplied, totalDead, _blocks.Method?.Name ?? "?");
+
 
 		return modified;
 	}

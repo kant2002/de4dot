@@ -100,27 +100,29 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
   delegate's generic argument and the enclosing generic-method instantiation to match the narrowed
   signature. That would recover the nicer `GenericMenu` type, but it means rewriting a TypeSpec and
   a MethodSpec chain — much riskier for one method's readability.
-- [ ] **4d. XorSwitch can emit methods with NO `ret` at all (infinite loop). NOT caught by ilverify.**
-  A resolved state machine can end as a block branching to itself with no method exit anywhere, e.g.
-  a 4-line field-copy method decompiling to `...; while (true) { x.rotation = f; }`. An infinite loop
-  is perfectly type-safe, so `realBug` stays 0 while the output is plainly wrong — **do not read
-  realBug 0/0/0 as "de4dot is correct"**.
-  SCALE: 4 methods (S2) and 15 methods (S3) have no `ret` in the entire body; 0 with `--no-cflow-deob`.
-  CONFIRMED by bisection to `XorSwitchDeobfuscator` specifically: disabling only that entry in the
-  Reactor v4 `BlocksDeobfuscators` list (leaving `DotNetReactorCflowDeobfuscator` and
-  `MethodCallInliner` on) also gives 0. Pre-existing-in-input was refuted — the original is a normal
-  8-case affine state machine with a real `ret`.
-  RULED OUT: `SwitchRewriter.CleanupDeadCases` deleting the exit block — instrumented, zero hits. A
-  defensive `IsMethodExit` guard was added there anyway (never remove a block containing
-  `ret`/`throw`/`rethrow`); it is inert on this corpus (decompiled IL byte-identical with/without) so
-  it costs nothing and closes the failure mode for other samples.
-  NEXT: instrument `EdgeResolver`/`SwitchRewriter` on the one small repro method and dump per-edge
-  `(predecessor, resolved target, case index, seed)` plus the block list before/after `Apply`, to
-  distinguish "legitimate 2-block cycle later merged into a self-loop" from "edge resolved to the
-  wrong target" (the same family as the already-fixed phase-6 double-apply bug). Read the
-  xorswitch skill first — three prior fix attempts in this pass all looked good on metrics and
-  produced broken IL. Suggested extra gate for this work: **count of methods with no `ret`/`throw`**,
-  which (unlike dispatch counts) cannot be lowered by deleting code.
+- [~] **4d. XorSwitch can emit methods with NO `ret` at all (infinite loop). PARTIALLY FIXED.**
+  S2 4 → 2; S1 6, S3 15 unchanged (the guard does not fire there). NOT caught by ilverify — an
+  infinite loop is type-safe, so `realBug` stays 0 while the output is plainly wrong.
+  **MECHANISM FOUND (one of at least two).** When only *some* of a dispatch's cases resolve, each
+  applied edge redirects a predecessor away from the switch block. Redirecting the last live
+  predecessor orphans the switch — and with it every case that was *not* resolved, which can be the
+  one holding the method's only exit. The blocks still exist at that moment (so a
+  "does a ret still exist?" check passes), but de4dot's later dead-block cleanup removes them, and
+  the method is left looping forever. Confirmed by instrumenting entry/exit *reachability* per pass:
+  `CancelUtils` and `ConnectProcess` both went reachable → unreachable inside a single pass, both
+  with `failed=1`.
+  FIX: `SwitchRewriter.WouldOrphanMethodExit` simulates the pending redirects on a copy of the
+  successor map and, if no `ret`/`throw` would remain reachable from entry, skips the whole dispatch.
+  The switch then survives as a recoverable `goto`, which the xorswitch skill already states is
+  strictly better than a bogus self-loop. Read-only simulation, so there is nothing to undo.
+  Verified: `realBug` still 0/0/0 on all three samples; cost is 4 dispatches left unresolved on S2
+  and **zero** on S1/S3.
+  REMAINING (2 on S2 — `RunWatcher`, `CustomizeProduct`; plus S1/S3): a *second* mechanism. These
+  never trip the reachability check inside XorSwitch — the exit is still reachable when the pass
+  returns — yet disabling XorSwitch alone makes them go away, so it reshapes the graph and a later
+  pass (`DotNetReactorCflowDeobfuscator`, `MethodCallInliner`, or the generic cflow cleanup) finishes
+  the job. NEXT: apply the same reachability check as a *post-condition* around the other block
+  deobfuscators to find which one drops it, rather than guessing.
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").

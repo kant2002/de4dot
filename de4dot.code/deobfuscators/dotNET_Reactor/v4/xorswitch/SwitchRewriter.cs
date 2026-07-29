@@ -27,6 +27,79 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4.xorswitch;
 ///     Applies resolved edges to the CFG. Pure transformation.
 /// </summary>
 static class SwitchRewriter {
+	/// <summary>
+	///     Would applying <paramref name="edges"/> leave the method with no reachable ret/throw?
+	///
+	///     This happens when only some of a dispatch's cases resolve. Each applied edge redirects a
+	///     predecessor away from the switch block; once the last live predecessor is redirected, the
+	///     switch itself becomes unreachable, and so does every case that was NOT resolved -- which
+	///     can include the one holding the method's only exit. The blocks still exist at that point,
+	///     so nothing here notices, but de4dot's later dead-block cleanup removes them and the method
+	///     is left looping forever. That is verifiable IL, so ilverify cannot catch it either.
+	///
+	///     Simulated on a copy of the successor map, so this is read-only: if the answer is "yes",
+	///     the caller leaves the dispatch alone and the switch survives as a recoverable goto, which
+	///     is always better than a silent infinite loop.
+	/// </summary>
+	static bool WouldOrphanMethodExit(Blocks blocks, List<ResolvedEdge> edges) {
+		var all = blocks.MethodBlocks.GetAllBlocks();
+		if (all.Count == 0)
+			return false;
+
+		// successor map with the pending redirects already applied
+		var succ = new Dictionary<Block, List<Block>>();
+		foreach (var b in all) {
+			var list = new List<Block>();
+			if (b.FallThrough is not null)
+				list.Add(b.FallThrough);
+			if (b.Targets is not null) {
+				foreach (var t in b.Targets)
+					if (t is not null)
+						list.Add(t);
+			}
+			succ[b] = list;
+		}
+		foreach (var e in edges) {
+			if (e.Predecessor is null || e.Target is null)
+				continue;
+			if (e.Predecessor == e.Target || e.Predecessor.Parent != e.Target.Parent)
+				continue; // Apply() skips these, so the simulation must too
+			succ[e.Predecessor] = new List<Block> { e.Target };
+		}
+
+		var seen = new HashSet<Block>();
+		var stack = new Stack<Block>();
+		stack.Push(all[0]);
+		while (stack.Count > 0) {
+			var b = stack.Pop();
+			if (!seen.Add(b))
+				continue;
+			foreach (var instr in b.Instructions) {
+				switch (instr.OpCode.Code) {
+				case Code.Ret:
+				case Code.Throw:
+				case Code.Rethrow:
+					return false; // an exit is still reachable
+				}
+			}
+			if (succ.TryGetValue(b, out var next)) {
+				foreach (var n in next)
+					stack.Push(n);
+			}
+		}
+		return true;
+	}
+
+	public static int Apply(Blocks blocks, DispatchNode dispatch, List<ResolvedEdge> edges) {
+		if (WouldOrphanMethodExit(blocks, edges)) {
+			Logger.v("  XOR-switch: skipping {0} edge(s) in {1} — the rewrite would orphan the "
+				+ "method's only exit (unresolved cases reachable only through this switch)",
+				edges.Count, blocks.Method?.Name ?? "?");
+			return 0;
+		}
+		return Apply(dispatch, edges);
+	}
+
 	public static int Apply(DispatchNode dispatch, List<ResolvedEdge> edges) {
 		int applied = 0;
 
