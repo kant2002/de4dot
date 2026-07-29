@@ -9,7 +9,7 @@ publish-net*/
 launchSettings.json
 *.user
 .idea/
-.claude/
+.claude/*.local.*
 
 # Test artifacts
 *.dll
