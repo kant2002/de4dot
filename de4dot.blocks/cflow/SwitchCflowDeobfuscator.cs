@@ -27,6 +27,84 @@ namespace de4dot.blocks.cflow {
 	class SwitchCflowDeobfuscator : BlockDeobfuscator {
 		InstructionEmulator instructionEmulator = new InstructionEmulator();
 
+		/// <summary>
+		///     One pending switch rewrite. Produced by the Plan* methods without touching the graph, so a
+		///     whole set can be validated together before any of it is applied — see
+		///     <see cref="WouldOrphanMethodExit"/> for why validating them one at a time is not enough.
+		/// </summary>
+		readonly struct SwitchRewrite {
+			public readonly Block Source;
+			public readonly Block Target;
+			/// <summary>Non-null only for Bcc sources: the switch block whose incoming edges get replaced.</summary>
+			public readonly Block? SwitchBlock;
+			public readonly bool AddPop;
+
+			SwitchRewrite(Block source, Block target, Block? switchBlock, bool addPop) {
+				Source = source;
+				Target = target;
+				SwitchBlock = switchBlock;
+				AddPop = addPop;
+			}
+
+			public static SwitchRewrite Branch(Block source, Block target) => new SwitchRewrite(source, target, null, false);
+			public static SwitchRewrite BranchWithPop(Block source, Block target) => new SwitchRewrite(source, target, null, true);
+			public static SwitchRewrite Bcc(Block source, Block target, Block switchBlock) => new SwitchRewrite(source, target, switchBlock, false);
+
+			/// <summary>Successors this rewrite would give <see cref="Source"/>.</summary>
+			public List<Block> ResultingSuccessors() {
+				if (SwitchBlock == null)
+					return new List<Block> { Target };
+				return SuccessorsWithBlockReplaced(Source, SwitchBlock, Target);
+			}
+		}
+
+		/// <summary>
+		///     Validates a whole plan and applies it only if it keeps a ret/throw reachable. Returns
+		///     whether anything was applied.
+		/// </summary>
+		bool ApplyPlan(List<SwitchRewrite> plan) {
+			Debug.Assert(allBlocks != null);
+			if (plan.Count == 0)
+				return false;
+
+			// One source can appear in several sub-plans (its own redirect plus a recursive fallback).
+			// Keep the first, so the simulated graph matches what Apply actually produces.
+			var seen = new HashSet<Block>();
+			var deduped = new List<SwitchRewrite>(plan.Count);
+			foreach (var r in plan) {
+				if (seen.Add(r.Source))
+					deduped.Add(r);
+			}
+
+			var overrides = new Dictionary<Block, List<Block>>();
+			foreach (var r in deduped)
+				overrides[r.Source] = r.ResultingSuccessors();
+			if (WouldOrphanMethodExit(allBlocks, overrides))
+				return false;
+
+			bool modified = false;
+			foreach (var r in deduped) {
+				if (r.SwitchBlock == null) {
+					r.Source.ReplaceLastNonBranchWithBranch(0, r.Target);
+					if (r.AddPop)
+						r.Source.Add(new Instr(OpCodes.Pop.ToInstruction()));
+					modified = true;
+				}
+				else {
+					Debug.Assert(r.Source.Targets != null);
+					if (r.Source.Targets[0] == r.SwitchBlock) {
+						r.Source.SetNewTarget(0, r.Target);
+						modified = true;
+					}
+					if (r.Source.FallThrough == r.SwitchBlock) {
+						r.Source.SetNewFallThrough(r.Target);
+						modified = true;
+					}
+				}
+			}
+			return modified;
+		}
+
 		protected override bool Deobfuscate(Block switchBlock) {
 			if (switchBlock.LastInstr.OpCode.Code != Code.Switch)
 				return false;
@@ -102,51 +180,44 @@ namespace de4dot.blocks.cflow {
 		}
 
 		bool DeobfuscateTOS(Block switchBlock) {
-			bool modified = false;
 			if (switchBlock.Targets == null)
-				return modified;
+				return false;
 			var targets = new List<Block>(switchBlock.Targets);
 
 			Debug.Assert(switchBlock.FallThrough != null);
-			modified |= DeobfuscateTOS(targets, switchBlock.FallThrough, switchBlock);
-
-			return modified;
+			var plan = new List<SwitchRewrite>();
+			PlanTOS(targets, switchBlock.FallThrough, switchBlock, plan);
+			return ApplyPlan(plan);
 		}
 
 		bool DeobfuscateLdloc(Block switchBlock) {
 			Debug.Assert(blocks != null);
-			bool modified = false;
-
 			var switchVariable = Instr.GetLocalVar(blocks.Locals, switchBlock.Instructions[0]);
 			if (switchVariable == null)
-				return modified;
-
+				return false;
 			if (switchBlock.Targets == null)
-				return modified;
+				return false;
 			var targets = new List<Block>(switchBlock.Targets);
 
 			Debug.Assert(switchBlock.FallThrough != null);
-			modified |= DeobfuscateLdloc(targets, switchBlock.FallThrough, switchBlock, switchVariable);
-
-			return modified;
+			var plan = new List<SwitchRewrite>();
+			PlanLdloc(targets, switchBlock.FallThrough, switchBlock, switchVariable, plan);
+			return ApplyPlan(plan);
 		}
 
 		bool DeobfuscateStLdloc(Block switchBlock) {
 			Debug.Assert(blocks != null);
-			bool modified = false;
-
 			var switchVariable = Instr.GetLocalVar(blocks.Locals, switchBlock.Instructions[0]);
 			if (switchVariable == null)
-				return modified;
-
+				return false;
 			if (switchBlock.Targets == null)
-				return modified;
+				return false;
 			var targets = new List<Block>(switchBlock.Targets);
 
 			Debug.Assert(switchBlock.FallThrough != null);
-			modified |= DeobfuscateStLdloc(targets, switchBlock.FallThrough, switchBlock);
-
-			return modified;
+			var plan = new List<SwitchRewrite>();
+			PlanStLdloc(targets, switchBlock.FallThrough, switchBlock, plan);
+			return ApplyPlan(plan);
 		}
 
 		// Switch deobfuscation when block uses stloc N, ldloc N to load switch constant
@@ -157,12 +228,11 @@ namespace de4dot.blocks.cflow {
 		//		stloc N
 		//		ldloc N
 		//		switch (......)
-		bool DeobfuscateStLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block) {
+		// Plan phase: works out the rewrites without touching the graph, so several plans can be
+		// unioned and validated together before anything is applied.
+		void PlanStLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block, List<SwitchRewrite> plan) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-
-			// Collect first, validate together — see WouldOrphanMethodExit.
-			var redirects = new List<KeyValuePair<Block, Block>>();
 			foreach (var source in new List<Block>(block.Sources)) {
 				if (!IsBranchBlock(source))
 					continue;
@@ -172,22 +242,8 @@ namespace de4dot.blocks.cflow {
 				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.Pop());
 				if (target == null)
 					continue;
-				redirects.Add(new KeyValuePair<Block, Block>(source, target));
+				plan.Add(SwitchRewrite.BranchWithPop(source, target));
 			}
-
-			var overrides = new Dictionary<Block, List<Block>>();
-			foreach (var r in redirects)
-				overrides[r.Key] = new List<Block> { r.Value };
-			if (WouldOrphanMethodExit(allBlocks, overrides))
-				return false;
-
-			bool modified = false;
-			foreach (var r in redirects) {
-				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
-				r.Key.Add(new Instr(OpCodes.Pop.ToInstruction()));
-				modified = true;
-			}
-			return modified;
 		}
 
 		// Switch deobfuscation when block uses ldloc N to load switch constant
@@ -198,61 +254,23 @@ namespace de4dot.blocks.cflow {
 		//	swblk:
 		//		ldloc N
 		//		switch (......)
-		bool DeobfuscateLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block, Local switchVariable) {
+		void PlanLdloc(IList<Block> switchTargets, Block switchFallThrough, Block block, Local switchVariable, List<SwitchRewrite> plan) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-
-			// Decide every rewrite first, then validate them together (see WouldOrphanMethodExit):
-			// applying one at a time cannot tell that the last one orphans the method's exit.
-			var branchRedirects = new List<KeyValuePair<Block, Block>>();
-			var bccRedirects = new List<KeyValuePair<Block, Block>>();
 			foreach (var source in new List<Block>(block.Sources)) {
-				if (IsBranchBlock(source)) {
-					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
-					instructionEmulator.Emulate(source.Instructions);
+				bool isBranch = IsBranchBlock(source);
+				if (!isBranch && !IsBccBlock(source))
+					continue;
+				instructionEmulator.Initialize(blocks, allBlocks[0] == source);
+				instructionEmulator.Emulate(source.Instructions);
 
-					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
-					if (target == null)
-						continue;
-					branchRedirects.Add(new KeyValuePair<Block, Block>(source, target));
-				}
-				else if (IsBccBlock(source)) {
-					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
-					instructionEmulator.Emulate(source.Instructions);
-
-					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
-					if (target == null)
-						continue;
-					bccRedirects.Add(new KeyValuePair<Block, Block>(source, target));
-				}
+				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
+				if (target == null)
+					continue;
+				plan.Add(isBranch
+					? SwitchRewrite.Branch(source, target)
+					: SwitchRewrite.Bcc(source, target, block));
 			}
-
-			var overrides = new Dictionary<Block, List<Block>>();
-			foreach (var r in branchRedirects)
-				overrides[r.Key] = new List<Block> { r.Value };
-			foreach (var r in bccRedirects)
-				overrides[r.Key] = SuccessorsWithBlockReplaced(r.Key, block, r.Value);
-			if (WouldOrphanMethodExit(allBlocks, overrides))
-				return false;
-
-			bool modified = false;
-			foreach (var r in branchRedirects) {
-				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
-				modified = true;
-			}
-			foreach (var r in bccRedirects) {
-				var source = r.Key;
-				Debug.Assert(source.Targets != null);
-				if (source.Targets[0] == block) {
-					source.SetNewTarget(0, r.Value);
-					modified = true;
-				}
-				if (source.FallThrough == block) {
-					source.SetNewFallThrough(r.Value);
-					modified = true;
-				}
-			}
-			return modified;
 		}
 
 		/// <summary>Successors of <paramref name="source"/> with every edge to <paramref name="oldTarget"/> pointed at <paramref name="newTarget"/>.</summary>
@@ -329,14 +347,9 @@ namespace de4dot.blocks.cflow {
 			return true;
 		}
 
-		bool DeobfuscateTOS(IList<Block> switchTargets, Block switchFallThrough, Block block) {
+		void PlanTOS(IList<Block> switchTargets, Block switchFallThrough, Block block, List<SwitchRewrite> plan) {
 			Debug.Assert(blocks != null);
 			Debug.Assert(allBlocks != null);
-
-			// Decide every redirect first so they can be validated together: applying them one at a
-			// time cannot tell that the last one is the one that orphans the method's exit.
-			var redirects = new List<KeyValuePair<Block, Block>>();
-			var ldlocFallbacks = new List<Block>();
 			foreach (var source in new List<Block>(block.Sources)) {
 				if (!IsBranchBlock(source))
 					continue;
@@ -344,27 +357,15 @@ namespace de4dot.blocks.cflow {
 				instructionEmulator.Emulate(source.Instructions);
 
 				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.Pop());
-				if (target == null)
-					ldlocFallbacks.Add(source);
+				if (target == null) {
+					// The constant is not on this source's stack; it may be one level further up, in
+					// which case that rewrite belongs to the SAME plan — validating it separately is
+					// what used to let the two of them jointly orphan the method's exit.
+					PlanTos_Ldloc(switchTargets, switchFallThrough, source, plan);
+				}
 				else
-					redirects.Add(new KeyValuePair<Block, Block>(source, target));
+					plan.Add(SwitchRewrite.BranchWithPop(source, target));
 			}
-
-			var tosOverrides = new Dictionary<Block, List<Block>>();
-			foreach (var r in redirects)
-				tosOverrides[r.Key] = new List<Block> { r.Value };
-			if (WouldOrphanMethodExit(allBlocks, tosOverrides))
-				return false;
-
-			bool modified = false;
-			foreach (var source in ldlocFallbacks)
-				modified |= DeobfuscateTos_Ldloc(switchTargets, switchFallThrough, source);
-			foreach (var r in redirects) {
-				r.Key.ReplaceLastNonBranchWithBranch(0, r.Value);
-				r.Key.Add(new Instr(OpCodes.Pop.ToInstruction()));
-				modified = true;
-			}
-			return modified;
 		}
 
 		//		ldloc N
@@ -373,18 +374,16 @@ namespace de4dot.blocks.cflow {
 		//		stloc N
 		//		ldloc N
 		//		br swblk
-		bool DeobfuscateTos_Ldloc(IList<Block> switchTargets, Block switchFallThrough, Block block) {
+		void PlanTos_Ldloc(IList<Block> switchTargets, Block switchFallThrough, Block block, List<SwitchRewrite> plan) {
 			Debug.Assert(blocks != null);
 			if (IsLdlocBranch(block, false)) {
 				var switchVariable = Instr.GetLocalVar(blocks.Locals, block.Instructions[0]);
 				if (switchVariable == null)
-					return false;
-				return DeobfuscateLdloc(switchTargets, switchFallThrough, block, switchVariable);
+					return;
+				PlanLdloc(switchTargets, switchFallThrough, block, switchVariable, plan);
 			}
 			else if (IsStLdlocBranch(block, false))
-				return DeobfuscateStLdloc(switchTargets, switchFallThrough, block);
-
-			return false;
+				PlanStLdloc(switchTargets, switchFallThrough, block, plan);
 		}
 
 		static bool IsBranchBlock(Block block) {

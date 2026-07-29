@@ -21,7 +21,8 @@ never raise it.**
 > undercounts. Assemble a complete reference set *first*, then measure.
 
 Also gate on `emptyM` (empty method bodies = deleted live code), stack underflows, and **methods with
-no `ret`/`throw` at all** (see item 4d — an infinite loop is type-safe, so ilverify cannot see it):
+no `ret`/`throw`/`rethrow` at all** (item 4d — an infinite loop is type-safe, so ilverify cannot
+see it; note `throw` counts as a valid exit, or iterator Reset() stubs read as false positives):
 all must stay
 at baseline. `dispatch`/`infLoop`/goto are readability signals and are DELETION-GAMEABLE — a drop can
 mean deleted code, so never trust them without checking `realBug`.
@@ -100,47 +101,37 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
   delegate's generic argument and the enclosing generic-method instantiation to match the narrowed
   signature. That would recover the nicer `GenericMenu` type, but it means rewriting a TypeSpec and
   a MethodSpec chain — much riskier for one method's readability.
-- [~] **4d. Passes can emit methods with NO `ret` at all (infinite loop). LARGELY FIXED: 25 -> 10.**
-  Two independent mechanisms, both now guarded. NOT caught by ilverify — an
-  infinite loop is type-safe, so `realBug` stays 0 while the output is plainly wrong.
-  **MECHANISM FOUND (one of at least two).** When only *some* of a dispatch's cases resolve, each
-  applied edge redirects a predecessor away from the switch block. Redirecting the last live
-  predecessor orphans the switch — and with it every case that was *not* resolved, which can be the
-  one holding the method's only exit. The blocks still exist at that moment (so a
-  "does a ret still exist?" check passes), but de4dot's later dead-block cleanup removes them, and
-  the method is left looping forever. Confirmed by instrumenting entry/exit *reachability* per pass:
-  `CancelUtils` and `ConnectProcess` both went reachable → unreachable inside a single pass, both
-  with `failed=1`.
-  FIX: `SwitchRewriter.WouldOrphanMethodExit` simulates the pending redirects on a copy of the
-  successor map and, if no `ret`/`throw` would remain reachable from entry, skips the whole dispatch.
-  The switch then survives as a recoverable `goto`, which the xorswitch skill already states is
-  strictly better than a bogus self-loop. Read-only simulation, so there is nothing to undo.
-  Verified: `realBug` still 0/0/0 on all three samples; cost is 4 dispatches left unresolved on S2
-  and **zero** on S1/S3.
-  **SECOND MECHANISM FOUND AND LARGELY FIXED — the generic `SwitchCflowDeobfuscator`, not XorSwitch.**
-  Located by instrumenting `BlocksCflowDeobfuscator`'s iteration loop with the same reachability
-  check after every step (`RemoveDeadBlocks`, `MergeBlocks`, and each `IBlocksDeobfuscator` by name):
-  all three remaining methods reported `exit became UNREACHABLE at step 'SwitchCflowDeobfuscator'`,
-  and a second probe narrowed it to the `DeobfuscateTOS` family.
-  It is the *same bug shape* as XorSwitch's, in de4dot's own shared switch pass: `DeobfuscateTOS`,
-  `DeobfuscateLdloc` and `DeobfuscateStLdloc` each walk the switch block's sources and redirect every
-  one straight to its resolved target. Once the last source is redirected the switch is unreachable,
-  and so is any switch target no source resolved to — which can hold the method's only exit.
-  FIX: all three workers now compute their redirects first and validate them together against
-  `WouldOrphanMethodExit` (a read-only simulation on a copy of the successor map) before applying
-  any. Applying one at a time cannot see that the *last* one is what orphans the exit. Bcc sources
-  are modelled correctly (only the edges pointing at the switch are replaced, via
-  `SuccessorsWithBlockReplaced`), so conditional predecessors keep their other edge.
-  Corpus effect, methods with no `ret`: **S1 6 → 2, S2 4 → 2, S3 15 → 6 (25 → 10 overall)**.
-  All gates hold: `realBug` still 0/0/0, zero empty method bodies, method counts unchanged
-  (S2 1019, S3 2859).
-  REMAINING (10): a *combined-effect* gap, not a new mechanism. Within one `DeobfuscateTOS` call the
-  `DeobfuscateTos_Ldloc` fallback and the direct redirects are validated separately, each against a
-  graph that does not yet include the other's edits, so neither sees that together they orphan the
-  exit. NEXT: split these workers into a "plan" phase (compute the successor overrides) and an
-  "apply" phase, so `DeobfuscateTOS` can union both plans and validate once. Do not try to fix it by
-  undoing after the fact — the rewrites also mutate instructions (`ReplaceLastNonBranchWithBranch`,
-  an added `pop`), so restoring successors alone would leave the block inconsistent.
+- [x] **4d. Passes could emit methods that never terminate (infinite loop). FIXED: 21 → 0.** DONE.
+  Some methods decompiled to `while (true) { ... }` with no exit at all. **Invisible to ilverify** —
+  an infinite loop is type-safe, so `realBug` stayed 0 while the output was plainly wrong. This is
+  the one bug class the correctness metric structurally cannot see.
+  **ONE ROOT CAUSE, THREE PLACES.** A switch rewrite redirects each predecessor of the switch block
+  straight to its resolved target. Redirect the *last live* predecessor and the switch itself becomes
+  unreachable — and so does every case that was not resolved, which can be the one holding the
+  method's only exit. The blocks still exist at that instant, so an "is there still a `ret`?" check
+  passes; the next iteration's dead-block cleanup then removes them.
+  The measurement change that cracked it: check whether an exit is **reachable**, not whether one
+  still exists.
+  FIXED IN:
+  1. `XorSwitchDeobfuscator`/`SwitchRewriter` (Reactor-specific) — `WouldOrphanMethodExit` simulates
+     the pending redirects on a copy of the successor map and skips the dispatch if no `ret`/`throw`
+     would stay reachable. Corpus 21 → 19.
+  2. `SwitchCflowDeobfuscator` (de4dot's **shared** switch pass) — same defect, found by
+     instrumenting `BlocksCflowDeobfuscator`'s loop after every step and every `IBlocksDeobfuscator`
+     by name. `DeobfuscateTOS`/`Ldloc`/`StLdloc` all had it. Corpus 19 → 6.
+  3. The combined-effect gap: within one `DeobfuscateTOS` call the `Tos_Ldloc` fallback and the
+     direct redirects were validated *separately*, each against a graph missing the other's edits.
+     Split all three workers into a **plan** phase (`PlanTOS`/`PlanLdloc`/`PlanStLdloc`, which never
+     touch the graph) and a single **apply** phase (`ApplyPlan`), so a call unions its own plan with
+     the recursive fallback plans and validates the union once. Corpus 6 → 0.
+  Rewrites are modelled as a `SwitchRewrite` value (branch / branch+pop / Bcc), so `Bcc` sources
+  correctly keep the edge that does not point at the switch. Plans are deduplicated by source, since
+  one block can appear in both its own plan and a recursive one.
+  ALL GATES HELD THROUGHOUT (verified corpus-wide, since 2 of the 3 sites are shared code):
+  `realBug` 0/0/0, zero empty method bodies, method counts unchanged (S1/S2 1019, S3 2859).
+  NOTE ON THE METRIC: a correct exit is `ret` **or** `throw`/`rethrow`. Counting only `ret` reports 4
+  false positives on S3 — compiler-generated iterator `IEnumerator.Reset()` stubs whose entire body is
+  `newobj NotSupportedException; throw`. Those were never broken.
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").
