@@ -1,7 +1,9 @@
 # de4dot .NET Reactor — Improvement Worklog
 
-One-by-one task tracker. Full context in `IMPROVEMENT_PLAN.md`. Test corpus: three .NET Reactor
-v6.x assemblies — **S1**, **S2** (smaller), **S3** (large); not in this repo.
+One-by-one task tracker. Full context in `IMPROVEMENT_PLAN.md`. **Start at [`ROADMAP.md`](ROADMAP.md)**
+for the state of the effort as a whole: what is measured, what is still wrong, and what "fully
+functional" would mean. Test corpus: three .NET Reactor v6.x assemblies — **S1**, **S2** (smaller),
+**S3** (large); not in this repo.
 
 ## Correctness metric
 

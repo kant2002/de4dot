@@ -7,6 +7,10 @@ methodology used to validate them.
 Test corpus: **three .NET Reactor v6.x assemblies** — **S1** and **S2** (smaller, ~16 types each)
 and **S3** (large, ~70 types). They are not part of this repo.
 
+> **[`ROADMAP.md`](ROADMAP.md) is the entry point.** This file is the detailed per-fix record and the
+> failed-experiment log; ROADMAP is the synthesis — current measured state, the remaining defect
+> class, and the ordered path to a deobfuscator whose output can be trusted. Read it first.
+
 ---
 
 ## Correctness methodology (read this first)
