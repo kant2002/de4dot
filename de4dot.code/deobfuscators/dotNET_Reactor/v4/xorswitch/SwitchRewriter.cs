@@ -75,6 +75,23 @@ static class SwitchRewriter {
 		return applied;
 	}
 
+	/// <summary>
+	///     True if the block ends the method (ret/throw/rethrow). Such a block must never be
+	///     discarded as "dead": doing so can leave the method with no exit at all, which is not
+	///     type-unsafe (so ilverify will not catch it) but is an infinite loop at runtime.
+	/// </summary>
+	static bool IsMethodExit(Block block) {
+		foreach (var instr in block.Instructions) {
+			switch (instr.OpCode.Code) {
+			case Code.Ret:
+			case Code.Throw:
+			case Code.Rethrow:
+				return true;
+			}
+		}
+		return false;
+	}
+
 	static bool AlreadyBranchesTo(Block block, Block target) {
 		var onlyTarget = block.GetOnlyTarget();
 		return onlyTarget == target;
@@ -116,6 +133,10 @@ static class SwitchRewriter {
 
 		foreach (var caseTarget in dispatch.CaseTargets) {
 			if (caseTarget.Sources.Count == 0 && caseTarget.Parent is not null) {
+				// Never discard a block that ends the method: doing so can leave the method
+				// with no exit at all -- verifiable IL, but an infinite loop at runtime.
+				if (IsMethodExit(caseTarget))
+					continue;
 				try {
 					caseTarget.Parent.RemoveGuaranteedDeadBlock(caseTarget);
 				}

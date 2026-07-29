@@ -20,7 +20,9 @@ never raise it.**
 > Lesson: never treat a `FileLoadErrorGeneric` as benign noise; it means the numbers next to it are
 > undercounts. Assemble a complete reference set *first*, then measure.
 
-Also gate on `emptyM` (empty method bodies = deleted live code) and stack underflows: both must stay
+Also gate on `emptyM` (empty method bodies = deleted live code), stack underflows, and **methods with
+no `ret`/`throw` at all** (see item 4d — an infinite loop is type-safe, so ilverify cannot see it):
+all must stay
 at baseline. `dispatch`/`infLoop`/goto are readability signals and are DELETION-GAMEABLE — a drop can
 mean deleted code, so never trust them without checking `realBug`.
 
@@ -98,6 +100,27 @@ Every fix: build → scorecard → confirm `realBug`/`emptyM` did not rise and n
   delegate's generic argument and the enclosing generic-method instantiation to match the narrowed
   signature. That would recover the nicer `GenericMenu` type, but it means rewriting a TypeSpec and
   a MethodSpec chain — much riskier for one method's readability.
+- [ ] **4d. XorSwitch can emit methods with NO `ret` at all (infinite loop). NOT caught by ilverify.**
+  A resolved state machine can end as a block branching to itself with no method exit anywhere, e.g.
+  a 4-line field-copy method decompiling to `...; while (true) { x.rotation = f; }`. An infinite loop
+  is perfectly type-safe, so `realBug` stays 0 while the output is plainly wrong — **do not read
+  realBug 0/0/0 as "de4dot is correct"**.
+  SCALE: 4 methods (S2) and 15 methods (S3) have no `ret` in the entire body; 0 with `--no-cflow-deob`.
+  CONFIRMED by bisection to `XorSwitchDeobfuscator` specifically: disabling only that entry in the
+  Reactor v4 `BlocksDeobfuscators` list (leaving `DotNetReactorCflowDeobfuscator` and
+  `MethodCallInliner` on) also gives 0. Pre-existing-in-input was refuted — the original is a normal
+  8-case affine state machine with a real `ret`.
+  RULED OUT: `SwitchRewriter.CleanupDeadCases` deleting the exit block — instrumented, zero hits. A
+  defensive `IsMethodExit` guard was added there anyway (never remove a block containing
+  `ret`/`throw`/`rethrow`); it is inert on this corpus (decompiled IL byte-identical with/without) so
+  it costs nothing and closes the failure mode for other samples.
+  NEXT: instrument `EdgeResolver`/`SwitchRewriter` on the one small repro method and dump per-edge
+  `(predecessor, resolved target, case index, seed)` plus the block list before/after `Apply`, to
+  distinguish "legitimate 2-block cycle later merged into a self-loop" from "edge resolved to the
+  wrong target" (the same family as the already-fixed phase-6 double-apply bug). Read the
+  xorswitch skill first — three prior fix attempts in this pass all looked good on metrics and
+  produced broken IL. Suggested extra gate for this work: **count of methods with no `ret`/`throw`**,
+  which (unlike dispatch counts) cannot be lowered by deleting code.
 - [ ] **5. Two-variable chained dispatch (Exp 4)** — DEFERRED. Needs joint inner+outer resolution +
   explicit stack rebalancing + per-method re-verification gating. Three prior attempts all produced
   invalid IL (see IMPROVEMENT_PLAN.md → "Two-variable chained dispatch").
