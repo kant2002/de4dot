@@ -57,11 +57,10 @@ EXPECTATIONS = [
     # entered twice. Must collapse to straight-line code calling A then B in that order.
     Expectation("two_site_linear", resolved=True, switch_gone=True, calls=["A", "B"]),
 
-    # The same payload block is reached in two configurations -- A() twice, then B(), then exit.
-    # Resolving it needs the block specialised into two copies. Refusing is the CORRECT behaviour
-    # until that exists: collapsing a state-dependent block to one target is the historic corruption.
-    # When specialisation lands this expectation flips to resolved=True, calls=["A", "A", "B"].
-    Expectation("shared_payload", outcome="RevisitedBlock", resolved=False),
+    # The same payload REGION is reached in two configurations -- A() twice, then B(), then exit --
+    # so it must be specialised into two copies. Collapsing a state-dependent region to one answer is
+    # the historic corruption; refusing it was slice 1's correct-but-limited behaviour.
+    Expectation("shared_payload", resolved=True, switch_gone=True, calls=["A", "A", "B"]),
 
     # The dispatch value comes out of a call, so nothing about it is knowable. Must refuse.
     Expectation("call_dependent", outcome="Undetermined", resolved=False),

@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using de4dot.blocks;
 using de4dot.blocks.cflow;
 using dnlib.DotNet;
@@ -59,31 +60,91 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4.xorswitch;
 static class RelationalDispatchResolver {
 	// Independent budgets: a configuration sequence can be non-repeating and still grow impractically,
 	// so "no repeat yet" is not on its own a reason to keep going.
-	const int MaxSteps = 512;
-	const int MaxVisitedBlocks = 256;
+	// Caps, fixed before the transformation was written and independent of one another: a
+	// configuration sequence can be non-repeating and still grow impractically.
+	const int MaxSteps = 512;               // walk steps
+	const int MaxVisitedBlocks = 256;       // distinct blocks the walk may enter
+	const int MaxRegionBlocks = 32;         // blocks in one single-entry region
+	const int MaxRegionCopies = 8;          // copies of any one block
+	const int MaxSpecialisedBlocks = 64;    // total blocks emitted by specialisation
+	const int MaxAddedInstructions = 4096;  // total instructions emitted by specialisation
 	const int MinDispatchSites = 2;
 
-	/// <summary>One predecessor edge to rewrite: cut the state push, branch straight to the target.</summary>
-	readonly struct PlannedEdge {
-		public PlannedEdge(Block predecessor, Block target, int instrsToRemove) {
-			Predecessor = predecessor;
-			Target = target;
-			InstrsToRemove = instrsToRemove;
+	/// <summary>
+	///     One step: leaving <c>From</c> on its <c>FromVisit</c>-th entry, arriving at <c>To</c> on
+	///     its <c>ToVisit</c>-th. The visit index is what makes specialisation expressible.
+	/// </summary>
+	readonly struct Transition {
+		public Transition(Block from, int fromVisit, Block to, int toVisit, bool viaSite, int cut) {
+			From = from; FromVisit = fromVisit; To = to; ToVisit = toVisit; ViaSite = viaSite; Cut = cut;
 		}
-
-		public Block Predecessor { get; }
-		public Block Target { get; }
-		public int InstrsToRemove { get; }
+		public Block From { get; }
+		public int FromVisit { get; }
+		public Block To { get; }
+		public int ToVisit { get; }
+		public bool ViaSite { get; }
+		public int Cut { get; }
+		public override string ToString() =>
+			$"{XorSwitchTrace.Id(From)}#{FromVisit} -> {XorSwitchTrace.Id(To)}#{ToVisit} viaSite={ViaSite} cut={Cut}";
 	}
 
 	/// <summary>Why a walk stopped. Only <see cref="Exit"/> is a result worth applying.</summary>
 	enum Outcome {
 		Exit,               // ret / throw / rethrow reached -- the machine provably terminates
 		Undetermined,       // a branch or dispatch index that is not a known constant
-		RevisitedBlock,     // needs specialisation -- slice 2
+		NotOwned,                // a region block has a predecessor outside the region
+		RegionTooLarge,
+		TooManyCopies,
+		GrowthCapExceeded,
+		UncloneableTerminator,   // a copy would need edges or a conditional rebuilt
 		BudgetExhausted,
 		UncuttablePush,     // the state push is not a removable pure suffix
 		LeftTheMachine,     // control reached something this model does not describe
+	}
+
+	/// <summary>
+	///     The maximal single-entry region a block starts, or null when ownership cannot be proven.
+	///     Sites are exits, not members. Owned means every member but the entry has all predecessors
+	///     inside — the safety property for copying it, since a member reachable from outside would
+	///     have its other callers stranded by, or redirected into, the copy. Payloads branch and
+	///     merge internally, so this is a subgraph, never a chain.
+	/// </summary>
+	static HashSet<Block>? DiscoverOwnedRegion(Block entry, HashSet<Block> sites, out Outcome failure) {
+		failure = Outcome.Exit;
+		var region = new HashSet<Block> { entry };
+		var queue = new Queue<Block>();
+		queue.Enqueue(entry);
+
+		while (queue.Count > 0) {
+			foreach (var succ in queue.Dequeue().GetTargets()) {
+				if (succ is null || sites.Contains(succ) || region.Contains(succ))
+					continue;
+				// A region may not straddle an exception-handler boundary: the copy would sit in a
+				// different protected region and be covered by different handlers.
+				if (succ.Parent != entry.Parent) {
+					failure = Outcome.NotOwned;
+					return null;
+				}
+				if (region.Count >= MaxRegionBlocks) {
+					failure = Outcome.RegionTooLarge;
+					return null;
+				}
+				region.Add(succ);
+				queue.Enqueue(succ);
+			}
+		}
+
+		foreach (var block in region) {
+			if (block == entry)
+				continue;
+			foreach (var pred in block.Sources) {
+				if (!region.Contains(pred)) {
+					failure = Outcome.NotOwned;
+					return null;
+				}
+			}
+		}
+		return region;
 	}
 
 	public static bool TryResolve(Blocks blocks, List<Block> allBlocks) {
@@ -101,38 +162,111 @@ static class RelationalDispatchResolver {
 		if (sites.Count < MinDispatchSites)
 			return false;
 
-		var plan = new List<PlannedEdge>();
+		var plan = new List<Transition>();
 		var outcome = Walk(blocks, allBlocks[0], sites, plan, out int sitesUsed, trace);
+		// Logged unconditionally. Printing it only on the failure path is what made an exception in
+		// the APPLY phase look like one in the walk.
 		if (trace)
-			XorSwitchTrace.Log($"relational: outcome={outcome} sitesUsed={sitesUsed} edges={plan.Count}");
+			XorSwitchTrace.Log($"relational: outcome={outcome} sitesUsed={sitesUsed} steps={plan.Count}");
 		if (outcome != Outcome.Exit || sitesUsed < MinDispatchSites || plan.Count == 0)
 			return false;
 
-		// One predecessor may only be rewritten once; two plans for the same block would mean the
-		// walk passed through it twice, which RevisitedBlock should already have caught.
-		var predecessors = new HashSet<Block>();
-		foreach (var edge in plan) {
-			if (!predecessors.Add(edge.Predecessor))
-				return false;
+		// ---- validate the whole plan; nothing is mutated above this line or below it until apply ----
+		var rewritten = new HashSet<(Block, int)>();
+		var copies = new HashSet<(Block, int)>();
+		foreach (var step in plan) {
+			if (step.FromVisit > 0) copies.Add((step.From, step.FromVisit));
+			if (step.ToVisit > 0) copies.Add((step.To, step.ToVisit));
+			if (!rewritten.Add((step.From, step.FromVisit)))
+				return Reject(trace, outcome, "one instance would need two terminators", step);
+			if (step.FromVisit > 0 && step.From.LastInstr.IsConditionalBranch())
+				return Reject(trace, Outcome.UncloneableTerminator, "a copy would need a conditional rebuilt", step);
+		}
+		// A copy inherits no edges — a fresh Block has no successors even though its copied
+		// instructions end in a branch — so one that is never a step's source would be emitted
+		// malformed.
+		foreach (var copy in copies) {
+			if (!rewritten.Contains(copy))
+				return Reject(trace, Outcome.UncloneableTerminator,
+					$"a copy of {XorSwitchTrace.Id(copy.Item1)}#{copy.Item2} would get no edges", default);
+		}
+		foreach (var (block, _) in copies.ToList()) {
+			var region = DiscoverOwnedRegion(block, sites, out var why);
+			if (region is null)
+				return Reject(trace, why, "single-entry ownership could not be proven", default);
+		}
+		int addedInstructions = copies.Sum(c => c.Item1.Instructions.Count);
+		if (copies.Count > MaxSpecialisedBlocks || addedInstructions > MaxAddedInstructions)
+			return Reject(trace, Outcome.GrowthCapExceeded,
+				$"growth {copies.Count} blocks / {addedInstructions} instrs exceeds the cap", default);
+
+		// ---- apply ----
+		if (trace)
+			XorSwitchTrace.Log($"relational: APPLYING {plan.Count} step(s), {copies.Count} copy/ies");
+		var made = new Dictionary<(Block, int), Block>();
+
+		// Every copy is taken FIRST, from the pristine blocks. Materialising lazily inside the rewrite
+		// loop makes the loop read and write the same blocks in turn: an earlier step's
+		// ReplaceLastInstrsWithBranch strips a block's instructions, and a later step then copies that
+		// stripped block. The empty copy is handed a cut computed against the original, which throws.
+		// The plan is validated as a whole; applying it has to be atomic with respect to its own
+		// inputs too.
+		foreach (var step in plan) {
+			Materialise(step.From, step.FromVisit, made);
+			Materialise(step.To, step.ToVisit, made);
 		}
 
-		foreach (var edge in plan)
-			edge.Predecessor.ReplaceLastInstrsWithBranch(edge.InstrsToRemove, edge.Target);
+		foreach (var step in plan) {
+			var from = Materialise(step.From, step.FromVisit, made);
+			var to = Materialise(step.To, step.ToVisit, made);
+			if (trace)
+				XorSwitchTrace.Log($"  apply {step} (fromInstrs={from.Instructions.Count})");
+			if (step.ViaSite)
+				from.ReplaceLastInstrsWithBranch(step.Cut, to);
+			else if (step.FromVisit > 0 || step.ToVisit > 0)
+				from.ReplaceLastInstrsWithBranch(from.LastInstr.IsBr() ? 1 : 0, to);
+		}
 
-		Logger.v("  XOR-switch relational: resolved {0} edge(s) across {1} dispatch site(s) in {2}",
-			plan.Count, sitesUsed, blocks.Method?.Name ?? "?");
+		if (trace)
+			XorSwitchTrace.Log($"relational: APPLIED copies={made.Count} addedInstrs={addedInstructions}");
+		Logger.v("  XOR-switch relational: resolved {0} step(s), {1} site(s), {2} specialised in {3}",
+			plan.Count, sitesUsed, made.Count, blocks.Method?.Name ?? "?");
 		return true;
+	}
+
+	static bool Reject(bool trace, Outcome outcome, string why, Transition step) {
+		if (trace)
+			XorSwitchTrace.Log($"relational: REFUSED ({outcome}) -- {why}"
+				+ (step.From is null ? "" : $" [{step}]"));
+		return false;
+	}
+
+	/// <summary>The block carrying a given visit: the original for the first, a copy for each later one.</summary>
+	static Block Materialise(Block block, int visit, Dictionary<(Block, int), Block> made) {
+		if (visit <= 0)
+			return block;
+		if (made.TryGetValue((block, visit), out var existing))
+			return existing;
+		var clone = new Block();
+		foreach (var instr in block.Instructions) {
+			// Fresh Instruction objects: two blocks sharing one instance would share its Offset, and
+			// the offset is what the writer and every branch fixup key on.
+			clone.Instructions.Add(new Instr(new Instruction(instr.OpCode, instr.Instruction.Operand)));
+		}
+		block.Parent!.Add(clone);
+		made[(block, visit)] = clone;
+		return clone;
 	}
 
 	/// <summary>
 	///     Interpret the method forward from its first instruction, recording the edge each dispatch
 	///     predecessor should become. Mutates nothing.
 	/// </summary>
-	static Outcome Walk(Blocks blocks, Block entry, HashSet<Block> sites, List<PlannedEdge> plan,
+	static Outcome Walk(Blocks blocks, Block entry, HashSet<Block> sites, List<Transition> plan,
 			out int sitesUsed, bool trace = false) {
 		sitesUsed = 0;
 		var usedSites = new HashSet<Block>();
-		var visited = new HashSet<Block>();
+		var visits = new Dictionary<Block, int>();
 
 		var emu = new InstructionEmulator();
 		// From the first instruction, so `.locals init` zeroing is real rather than assumed -- the
@@ -142,6 +276,7 @@ static class RelationalDispatchResolver {
 		var current = entry;
 		Block? pendingPredecessor = null;
 		int pendingPredecessorDepth = 0;
+		int pendingPredecessorVisit = 0;
 
 		for (int step = 0; step < MaxSteps; step++) {
 			if (current is null)
@@ -149,19 +284,30 @@ static class RelationalDispatchResolver {
 
 			int entryDepth = emu.StackSize();
 			bool isSite = sites.Contains(current);
-			// Only payload blocks are held to "entered at most once". A dispatch site is re-entered
-			// on every iteration of the machine by construction -- that is the loop going around --
-			// and it carries no state of its own: it consumes the pending value and branches. What
-			// needs specialising, and so is refused here, is a payload block reached in two different
-			// configurations. MaxSteps still bounds a machine that only ever cycles between sites.
+			// A dispatch site is re-entered every iteration by construction and carries no state of
+			// its own, so it is never specialised. A payload block reached again is a distinct step
+			// and gets its own copy; the visit index distinguishes them.
+			int visit = 0;
 			if (!isSite) {
-				if (!visited.Add(current))
-					return Outcome.RevisitedBlock;
-				if (visited.Count > MaxVisitedBlocks)
+				visits.TryGetValue(current, out visit);
+				visits[current] = visit + 1;
+				if (visit >= MaxRegionCopies)
+					return Outcome.TooManyCopies;
+				if (visits.Count > MaxVisitedBlocks)
 					return Outcome.BudgetExhausted;
 			}
 			if (trace)
-				XorSwitchTrace.Log($"  step {step}: {XorSwitchTrace.Id(current)} site={isSite} [{XorSwitchTrace.Sketch(current)}]");
+				XorSwitchTrace.Log($"  step {step}: {XorSwitchTrace.Id(current)}#{visit} site={isSite} "
+					+ $"last={current.LastInstr.OpCode.Name} succ={current.GetTargets().Count()} "
+					+ $"pred={current.Sources.Count} depth={emu.StackSize()} [{XorSwitchTrace.Sketch(current)}]");
+
+			// Fill in the arriving side of the step that led here, now its visit index is known.
+			if (plan.Count > 0 && plan[plan.Count - 1].ToVisit < 0) {
+				var pending = plan[plan.Count - 1];
+				plan[plan.Count - 1] = new Transition(pending.From, pending.FromVisit, pending.To,
+					isSite ? 0 : visit, pending.ViaSite, pending.Cut);
+			}
+
 			var instrs = current.Instructions;
 			int end = instrs.Count;
 			// The terminator is interpreted below, not emulated, so the operands it consumes are
@@ -198,7 +344,7 @@ static class RelationalDispatchResolver {
 				if (cut < 0)
 					return Outcome.UncuttablePush;
 
-				plan.Add(new PlannedEdge(pendingPredecessor, target, cut));
+				plan.Add(new Transition(pendingPredecessor, pendingPredecessorVisit, target, -1, true, cut));
 				usedSites.Add(current);
 				sitesUsed = usedSites.Count;
 				pendingPredecessor = null;
@@ -230,7 +376,12 @@ static class RelationalDispatchResolver {
 					return Outcome.LeftTheMachine;
 			}
 
+			// Only genuinely internal moves. A move INTO a site is that site's traversal, recorded
+			// on arrival; recording it here too would read as two terminators for one instance.
+			if (!sites.Contains(next))
+				plan.Add(new Transition(current, visit, next, -1, false, 0));
 			pendingPredecessor = current;
+			pendingPredecessorVisit = visit;
 			pendingPredecessorDepth = entryDepth;
 			current = next;
 		}
