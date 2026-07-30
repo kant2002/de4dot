@@ -45,8 +45,9 @@ Run order and each gate's blind spot: ROADMAP §4.
   `RelationalDispatchResolver` walks the machine forward carrying the configuration on the edge, so
   there is no seed and no case attribution. Branch-and-select rejections 19 → 5 with **zero** new
   rejections, every other gate unchanged. Slice 2 = specialise a payload block entered in two
-  configurations (`CloneSystem`); slice 3 = relax determinism. **IL fixtures still unwritten** —
-  needs `ilasm`, absent here. ROADMAP §7 item 3.
+  configurations. **Slice 2 attempted and reverted**: a Reactor payload spans several blocks, so it is
+  a *region* that needs specialising, not a block — it resolved nothing and the scope boundary is the
+  finding. Fixtures now exist and pass (`tests/run_xorswitch_tests.py`). ROADMAP §7 item 3.
 - [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
   drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a

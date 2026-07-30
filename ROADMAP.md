@@ -686,10 +686,30 @@ Ordered by value. Each step must hold every gate in §4.
      stack-carried state block reads as an underflow and its push could never be cut. The walk knows
      the real entry depth; it now passes it in.
 
-   **Outstanding: the IL fixtures.** `tests/samples/inlining/` is the right harness but needs
-   `ilasm`/`ildasm`, which this environment does not have, so the shape fixtures — two-site linear,
-   shared transform, and the negative case that must be left untouched — are **not yet written**.
-   Corpus acceptance above is what has actually been verified. Write them where the harness can run.
+   **Slice 2 — attempted, reverted, and the scope boundary is the finding.** Every one of the five
+   remaining rejections refuses with `RevisitedBlock`, so specialising a payload block reached in two
+   configurations looked like exactly the right next step. Built it: visit-indexed steps, a copy of
+   the block per configuration, whole-plan validation before any mutation. It resolved **nothing** on
+   the corpus — gates and rejection set byte-identical to slice 1 — and was reverted rather than left
+   in as inert machinery.
+
+   The reason is a shape the design did not anticipate. A Reactor payload does not occupy one block:
+   the opaque predicate splits it, so `call A(); ldc.i4.0; br OUTER` is two blocks joined by a
+   non-dispatch edge. Specialising it therefore needs the whole **chain** copied, and a copy's
+   non-dispatch edges rebuilt — which slice 2 explicitly excluded, refusing with "a specialised block
+   on a non-dispatch edge". That exclusion is what makes it safe and also what makes it useless here:
+   it excludes every real instance.
+
+   So slice 2 is not "specialise a block", it is **specialise a region** — the maximal single-entry
+   chain between two dispatch traversals — and its cost is rebuilding that region's internal edges,
+   not just one terminator. The `shared_payload` fixture is already the right shape for it (A(),
+   A(), then B(), then exit) and currently asserts the refusal; when specialisation lands, flip that
+   expectation to `resolved=True, calls=["A", "A", "B"]`.
+
+   **Fixtures: done.** `tests/run_xorswitch_tests.py` plus three fixtures under
+   `tests/samples/xorswitch/`, 3/3 passing. Portable, because `test.ps1` cannot run outside Windows
+   and its byte-comparison against checked-in `.cleaned.il` is not reproducible across ildasm builds;
+   these assert what the resolver *decided* instead.
 
    **6. Regression tests.** `tests/samples/inlining/` already assembles `<name>.il`, runs de4dot, and
    diffs against `<name>.cleaned.il` — the right harness, and there is no other. Add shape fixtures

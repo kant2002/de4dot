@@ -33,7 +33,7 @@
       ret
 
     SEED:                        // outer case 2 -- constant re-seed
-      ldc.i4 0x11110007
+      ldc.i4 0x11110018
 
     INNER:                       // second dispatch site; state arrives on the stack
       ldc.i4 0x5A5A5A5A

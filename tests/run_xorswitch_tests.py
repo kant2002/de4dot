@@ -57,9 +57,10 @@ EXPECTATIONS = [
     # entered twice. Must collapse to straight-line code calling A then B in that order.
     Expectation("two_site_linear", resolved=True, switch_gone=True, calls=["A", "B"]),
 
-    # The same payload block is reached in two different configurations, so resolving it needs
-    # specialising the block into two copies. Slice 1 must REFUSE, not pick one of the two answers --
-    # collapsing a state-dependent block to a single target is the historic corruption.
+    # The same payload block is reached in two configurations -- A() twice, then B(), then exit.
+    # Resolving it needs the block specialised into two copies. Refusing is the CORRECT behaviour
+    # until that exists: collapsing a state-dependent block to one target is the historic corruption.
+    # When specialisation lands this expectation flips to resolved=True, calls=["A", "A", "B"].
     Expectation("shared_payload", outcome="RevisitedBlock", resolved=False),
 
     # The dispatch value comes out of a call, so nothing about it is knowable. Must refuse.
@@ -105,7 +106,7 @@ def find_de4dot() -> list[str]:
 
 
 OUTCOME_RE = re.compile(r"relational: outcome=(\w+)")
-RESOLVED_RE = re.compile(r"XOR-switch relational: resolved (\d+) edge")
+RESOLVED_RE = re.compile(r"XOR-switch relational: resolved (\d+) (?:edge|step)")
 
 
 def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path) -> list[str]:
