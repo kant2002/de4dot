@@ -641,9 +641,40 @@ Ordered by value. Each step must hold every gate in §4.
    partially-resolved body will hit the same trap. **Fix the seeding first; the zero is only
    meaningful in a body whose stores are still all there.**
 
-5. **Closure/lambda inlining.** Nested `<>c__DisplayClass` closures are not recursively inlined by the
-   decompiler; a de4dot IL transform could inline simple single-delegate DisplayClass patterns.
-   Readability.
+5. **Closure/lambda inlining.** Was worded "nested `<>c__DisplayClass` closures are not recursively
+   inlined by the decompiler". Measured, and the premise was wrong: nesting was never the dominant
+   cause. A closure the decompiler inlines vanishes from the output, so every closure type still
+   visible is one that was not inlined, and the shape of the type says why. Across the corpus:
+
+   | cause | closure types | construction sites |
+   |---|---|---|
+   | writable static self-reference field (obfuscator residue) | 79 → **0** | 100 → **0** |
+   | captures a parent closure (the "nested" case) | 15 | 27 |
+   | neither | 51 → 115 | 0 → 73 |
+
+   **The residue column was de4dot's and is now fixed.** Reactor injects, per closure type, a
+   writable static self-reference field plus *two* static helpers that read it — a `bool` null-check
+   guard and a plain getter returning the declaring type. `DisplayClassCleaner` recognised only the
+   guard, so the getter survived as a "remaining" referencer and `PruneReferencedRemovals` kept the
+   field; the field is what stops the decompiler recognising the type as an inlinable closure. The
+   getter is now recognised too. Verified against the original binary on the smallest case
+   (`<>c__DisplayClass66_0`: field `RestartFactory`, guard `MoveFactory`, getter `RunFactory`).
+   Gates all unchanged; the only metadata movement is **−274 fields** across the corpus, and the
+   canonical export loses 166 lines, all of them those field declarations.
+
+   **What remains is not de4dot's to fix.** 15 types capture a parent closure — a decompiler
+   limitation, not obfuscation, and the emitted C# is correct, only verbose. Merging two closure
+   types into one to work around it would rewrite structure the *original source* genuinely had.
+   The 115 "neither" types are likewise the decompiler declining to inline for its own reasons.
+   **Closed**: the actionable part is done, the residual is presentation, and 15 sites does not
+   justify a new IL pass.
+
+   > The measurement is `analyze_closures.py` in the downstream tooling, and it is the reason this
+   > entry could be settled at all. It also caught the reverse error: the fix above was briefly
+   > reverted because the acceptance check's *printed* summary omitted the field count, so a change
+   > that removed 274 fields and moved nothing else was eyeballed as "no effect". The JSON had it all
+   > along. Two lessons, both already paid for: a readability claim needs a metric that can see the
+   > thing it claims, and "no change" from a check that does not measure the change is not evidence.
 
 ### Definition of done
 

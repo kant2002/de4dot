@@ -115,13 +115,17 @@ class DisplayClassCleaner {
 		if (injectedFields.Count == 0)
 			return;
 
-		// Find static methods that only reference injected fields (null-check guards).
-		// Pattern: ldsfld <injected_field>; ldnull; ceq; ret
+		// Find the static helpers Reactor injects alongside those fields. It emits a *pair* per
+		// closure type — a null-check guard and a plain getter — and both have to go, because
+		// PruneReferencedRemovals keeps any field a surviving method still reads. Recognising only
+		// the guard therefore preserves the field, and the field is what stops the decompiler
+		// treating the type as a closure it can inline into a lambda.
 		var injectedFieldSet = new HashSet<FieldDef>(injectedFields);
 		foreach (var method in type.Methods) {
 			if (!method.IsStatic || method.IsConstructor)
 				continue;
-			if (IsInjectedNullCheckMethod(method, injectedFieldSet))
+			if (IsInjectedNullCheckMethod(method, injectedFieldSet) ||
+				IsInjectedFieldGetter(method, type, injectedFieldSet))
 				methodsToRemove.Add(method);
 		}
 
@@ -185,6 +189,34 @@ class DisplayClassCleaner {
 		}
 
 		return false;
+	}
+
+	/// <summary>
+	///     Checks if a method is the .NET Reactor-injected getter for one of the injected fields:
+	///     a static, parameterless <c>ldsfld &lt;field&gt;; ret</c> returning the declaring type.
+	///
+	///     <para>
+	///     Deliberately exact — two instructions, nothing else — because this is the shape whose
+	///     absence from the removal set silently preserves the field. Anything that does more than
+	///     hand the field back is not this helper and is left alone.
+	///     </para>
+	/// </summary>
+	static bool IsInjectedFieldGetter(MethodDef method, TypeDef type, HashSet<FieldDef> injectedFields) {
+		if (!method.HasBody || method.Body.Instructions is null)
+			return false;
+		if (method.Parameters.Count != 0)
+			return false;
+		if (!IsSameType(method.ReturnType, type))
+			return false;
+
+		var instrs = method.Body.Instructions;
+		if (instrs.Count != 2)
+			return false;
+		if (instrs[0].OpCode.Code != Code.Ldsfld)
+			return false;
+		if (instrs[0].Operand is not FieldDef loadedField || !injectedFields.Contains(loadedField))
+			return false;
+		return instrs[1].OpCode.Code == Code.Ret;
 	}
 
 	/// <summary>

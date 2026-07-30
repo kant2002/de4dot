@@ -28,6 +28,17 @@ Run order and each gate's blind spot: ROADMAP §4.
 - [x] **8.** Constant-data extraction worker; fork-wide net8.0 pin removed — ROADMAP §8
 - [x] **9.** XorSwitch branch-and-select: non-terminating machines 19 → 0 — ROADMAP §6
 
+- [x] **10.** ~~Closure/lambda inlining for nested `<>c__DisplayClass`.~~ **DONE for the actionable
+  part, CLOSED for the rest.** Measured: nesting was never the dominant cause. Obfuscator residue was
+  (79 closure types / 100 construction sites), and `DisplayClassCleaner` now removes it — −274 fields,
+  every gate unchanged. What is left is a decompiler limitation over 15 types. ROADMAP §7 item 5.
+
+- [x] **11.** ~~Resolve the machines contained by branch-and-select by fixing the `EdgeResolver`
+  double-apply.~~ **CLOSED — not separately actionable.** The seed is wrong because the case
+  attribution is, and correcting the attribution cannot solve these methods: the state they need is
+  relational (inner state **plus** outer-dispatch arm) and `DispatchNode` cannot represent it. Folded
+  into **#5**. ROADMAP §5 — read it before writing any new attribution rule or seed guard.
+
 ## Open
 
 - [ ] **5.** Two-variable chained dispatch — deferred, and it is a **representation change**, not a
@@ -35,12 +46,6 @@ Run order and each gate's blind spot: ROADMAP §4.
   inner+outer resolution, explicit stack rebalancing, and per-method re-verification gating. Three
   prior attempts all produced invalid IL; **read ROADMAP §7 item 3 and §5 before starting** rather
   than re-deriving them.
-- [ ] **10.** Closure/lambda inlining for nested `<>c__DisplayClass` — readability. ROADMAP §7 item 5.
-- [x] **11.** ~~Resolve the machines contained by branch-and-select by fixing the `EdgeResolver`
-  double-apply.~~ **CLOSED — not separately actionable.** The seed is wrong because the case
-  attribution is, and correcting the attribution cannot solve these methods: the state they need is
-  relational (inner state **plus** outer-dispatch arm) and `DispatchNode` cannot represent it. Folded
-  into **#5**. ROADMAP §5 — read it before writing any new attribution rule or seed guard.
 - [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
   drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
