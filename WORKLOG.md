@@ -47,7 +47,13 @@ Run order and each gate's blind spot: ROADMAP §4.
   protocol failure; stderr drained via `BeginErrorReadLine` into a bounded buffer and logged on
   failure. Fail-closed boundary untouched; gates byte-identical. ROADMAP §8.
 
+- [x] **13.** v6 branch audit notes — **AUDITED AND CLASSIFIED, neither fixed.** `IDeobfuscator`'s
+  added member: **accepted compatibility break** (no compatibility promise to honour, and a default
+  interface method is unavailable while net48 is a target). `TrackedArrayValue` mutability:
+  **documented invariant**, no reachable hazard — it cannot outlive one `Initialize`. ROADMAP §9.
+
 ## Open
 
-- [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
-  breaking change for out-of-tree plugins; `TrackedArrayValue` is a mutable `Value`. ROADMAP §9.
+_Empty._ Every queued item is closed — fixed, or audited and classified with its evidence in
+`ROADMAP.md`. Add new work here rather than reopening a closed item; if a closed finding turns out to
+be wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.

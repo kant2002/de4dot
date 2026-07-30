@@ -996,14 +996,42 @@ gate 7 at 35 / 35 / 27 confirming the worker path still runs.
 - **`realBug 0` is not "correct".** It means no type-unsafe IL. Say that precisely; the difference is
   exactly the defect in §5.
 
-### Still-open notes from the Reactor v6 branch audit
+### Notes from the Reactor v6 branch audit — audited and classified
 
-The branch that added the v6 deobfuscator also modified **shared** code. Findings that are still live:
+The branch that added the v6 deobfuscator also modified **shared** code. Both open notes were audited
+rather than fixed, because a fix manufactured to empty a queue is worse than a recorded finding:
 
-- **Noted (low priority):** `IDeobfuscator` gained a member — a breaking change for out-of-tree plugin
-  DLLs that implement the interface directly (internal code is safe via a virtual default).
-- **Latent:** `TrackedArrayValue` is a mutable `Value` (aliasing hazard if an array local survives
-  speculative re-emulation).
+- **`IDeobfuscator` gained a member — ACCEPTED COMPATIBILITY BREAK.** The member is
+  `IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos()`. Plugins are discovered by
+  scanning `bin/` for classes implementing **`IDeobfuscatorInfo`**, whose `CreateDeobfuscator()`
+  returns an `IDeobfuscator` — so the break reaches a plugin only if its deobfuscator implements
+  `IDeobfuscator` *directly*. One that derives from `DeobfuscatorBase`, which every in-tree
+  deobfuscator does and which supplies a `virtual` default, is unaffected in both source and load
+  form. For a direct implementer it is a real break at compile time and a `TypeLoadException` at
+  load. **Not fixed, for two reasons.** There is no compatibility promise anywhere in this repo to
+  honour — the only mentions of plugin breakage are this note and the skill that warns to check. And
+  the obvious mitigation, a default interface method, **is unavailable while `net48` is a target**:
+  DIMs need .NET Standard 2.1 / .NET Core 3.0+, and `de4dot.code` targets `net48;net10.0`. Revisit
+  only if net48 is dropped *and* an external plugin is known to implement the interface directly.
+
+- **`TrackedArrayValue` mutability — DOCUMENTED INVARIANT, no reachable hazard.** It wraps a
+  `List<Value>` that `Emulate_Stelem` mutates in place, so the concern was aliasing across
+  speculative re-emulation. It cannot escape, and the reasons are worth keeping because a future
+  change could each break one of them:
+  1. **It never outlives one `Initialize(...)`.** The stack is cleared there, and `locals` is
+     re-populated from `cached_locals`/`cached_zeroed_locals`, which only ever hold freshly created
+     unknown/typed values — a `TrackedArrayValue` is written into `locals` by `SetLocal`, never into
+     the cached lists, so the next initialise discards it.
+  2. **Sharing inside one scope is semantically correct.** `dup`, `stloc`/`ldloc` genuinely alias one
+     array in real IL, so a `stelem` seen through another reference is right, not a bug.
+  3. **It reports `ValueType.Unknown`, not `Object`** — deliberately, per its own doc comment — so no
+     consumer folds a branch or a constant from it.
+  4. Its whole surface is one construction site (`Emulate_Newarr`) and two accessors, and `stelem`
+     only stores `Int32Value`.
+
+  **What would break this:** caching values across `Initialize`, letting a `TrackedArrayValue` reach
+  `cached_locals`, making it report as `Object`, or handing one to a consumer that outlives the
+  emulator. Any of those turns the aliasing from correct into a corruption of shared abstract state.
 - **Verified safe:** the dnlib 3.6→4.5 migration (incl. the CodeVeil resource-API edits), a
   `Resolver.cs` refactor, and the `Sizeof`/`Unbox`/`Rem_Un`/switch-refactor emulator changes.
 - The pre-branch de4dot cannot process these v6.x samples at all, so the Reactor-path introduced bugs
