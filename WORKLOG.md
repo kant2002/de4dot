@@ -74,30 +74,27 @@ Run order and each gate's blind spot: ROADMAP §4.
   it per candidate and moves on, so a later qualifying candidate is still folded. The check shrank to
   one `.cctor` body scan, which is what makes it affordable per candidate. ROADMAP §7 item 3.
 
+- [x] **17a.** Per-case attribution crossing dispatch boundaries — **FIXED.** The BFS stops at another
+  dispatch, both exits attribute correctly, S3 `InterruptQueue` resolves and leaves the rejection set.
+  Costs some resolution (dispatch sites 44 → 47, `goto` 84 → 129), the accepted trade. ROADMAP §7a.
+
+- [x] **18.** Review the undecidable set the way #16's two were — **DONE, all faithful.** Diffed by
+  identity, which mattered: the count moved 2 → 4 while *three* arrived (`NewIdentifier`,
+  `DisableAnnotation`, `CustomizeVisitor`) and `InterruptQueue` left. Each is a genuine source-level
+  switch or a machine that exits normally, inside the obfuscator's `while (true)` shell — so the size
+  of that set is not a defect count. The `goto` rise is two methods (`SetupRef`, `ConnectRequest`),
+  both keeping every call target, so no payload was lost; `while (true)` fell 52 → 49. ROADMAP §7a.
+
 ## Open
 
-- [ ] **17.** The per-site resolver still *produces* that bad rewrite; #16 only stops it shipping.
-  **Diagnosed, both methods: wrong case attribution.** The per-case BFS traverses through a second
-  dispatch and reaches an exit block it does not own; the collision marks it ambiguous and aborts the
-  search, so no edge to the exit is derived. **Attribution fixed** — the per-case BFS no longer expands
-  through another dispatch, and both exits now attribute correctly. S3 resolves and is no longer
-  rejected; **S1 narrowed: wrong incoming-state provenance producing an omitted edge** — phase 3's
-  fallback takes the first seed that resolves to any in-range case when a predecessor has no owning
-  case, and the edge to the exit is never derived while the resolver reports `0 failed`. Not later
-  replacement. Making that fallback decline was **built, measured, reverted** — it clears the rejection
-  entirely but costs `goto` 129→1772; the guess is load-bearing corpus-wide, so the fix must make it
-  sound rather than remove it. ROADMAP §7a.
-  Costs some resolution (dispatch sites 44→47, gotos 84→129), which is the accepted trade. ROADMAP §7a.
-
-- [ ] **18.** Review the undecidable set the way #16's two were reviewed. Diffed by identity: it is
-  **three new** (`NewIdentifier`, `DisableAnnotation`, `CustomizeVisitor`), not two — `InterruptQueue`
-  left the set, so the 2→4 count hid one. `NewIdentifier` reviewed: **faithful, more verbose** — its
-  **all three reviewed and faithful** — each is a real source-level switch or a machine that
-  exits normally, inside the obfuscator's `while (true)` shell. The set's size is not a defect count. The goto rise is checked: two methods
-  (`SetupRef`, `ConnectRequest`) carry it, both keep every call target, so no payload was lost;
-  `while (true)` fell 52→49. Classify each against the original IL, check the methods
-  behind `goto 84→129` for dropped payload, and hold #17's attribution fix (plus the matching export
-  and snapshot commits) until then. ROADMAP §7a.
+- [ ] **17.** Make phase 3's seed fallback sound. Attribution is fixed — the per-case BFS no longer
+  expands through another dispatch — and S3 resolves correctly. S1 still emits a machine that cannot
+  terminate: when a predecessor has no owning case the fallback takes the first seed that resolves to
+  any in-range case, which is a guess, and the edge to the exit is never derived. Its bookkeeping is
+  now honest — guessed edges count separately, S1 applies **61** of them — so the resolver can report
+  a machine as incompletely derived instead of claiming `0 failed`. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
+  the guess is load-bearing corpus-wide, so it has to become *sound*, not go away. #16's containment
+  catches the bad candidate meanwhile. ROADMAP §7a, and §5 before writing any seed rule.
 
 Add new work here rather than reopening a closed item; if a closed finding turns out to be
 wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.

@@ -69,6 +69,7 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 		bool modified = false;
 		int totalDispatches = 0;
 		int totalResolved = 0;
+		int totalGuessed = 0;
 		int totalFailed = 0;
 		int totalApplied = 0;
 		int totalDead = 0;
@@ -103,6 +104,7 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 			var resolver = new EdgeResolver(node, _blocks);
 			var edges = resolver.ResolveAll();
 			totalResolved += resolver.ResolvedCount;
+			totalGuessed += resolver.GuessedCount;
 			totalFailed += resolver.FailedCount;
 
 			if (edges.Count == 0 || SuppressDispatchResolution)
@@ -121,8 +123,9 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 		}
 
 		if (totalDispatches > 0)
-			Logger.v("  XOR-switch [{5}]: {0} dispatches, {1} edges resolved, {2} failed, {3} applied, {4} dead cases",
-				totalDispatches, totalResolved, totalFailed, totalApplied, totalDead, _blocks.Method?.Name ?? "?");
+			Logger.v("  XOR-switch [{6}]: {0} dispatches, {1} edges resolved, {2} guessed, {3} failed, {4} applied, {5} dead cases",
+				totalDispatches, totalResolved, totalGuessed, totalFailed, totalApplied, totalDead,
+				_blocks.Method?.Name ?? "?");
 
 
 		return modified;

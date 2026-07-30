@@ -55,6 +55,22 @@ class EdgeResolver {
 
 	public int FailedCount { get; private set; }
 
+	/// <summary>
+	///     Edges that were applied but not derived — phase 3 had no owning case to check a seed
+	///     against, so it took the first one whose arithmetic landed inside the case range.
+	/// </summary>
+	/// <remarks>
+	///     Counted apart from <see cref="ResolvedCount"/> because folding them together is how a
+	///     machine that cannot terminate got reported as `0 failed`: with a guess counted as a
+	///     derivation, the resolver's own bookkeeping could never contradict it, and the defect was
+	///     visible only to an external trace.
+	///
+	///     These edges are still applied. Withholding them was measured and collapses resolution
+	///     across the corpus — the guess carries most methods, so it has to be made sound rather than
+	///     removed. Until it is, this is the number that says how much of a result rests on it.
+	/// </remarks>
+	public int GuessedCount { get; private set; }
+
 	readonly bool _trace;
 
 	public EdgeResolver(DispatchNode dispatch, Blocks blocks) {
@@ -311,7 +327,10 @@ class EdgeResolver {
 										: "allSeeds, FIRST THAT RESOLVES AT ALL (pred has no owning case)", edge.Value);
 									edges.Add(edge.Value);
 									resolved.Add(pred);
-									ResolvedCount++;
+									if (hasCaseIdx)
+										ResolvedCount++;
+									else
+										GuessedCount++;
 									phase3Progress = true;
 
 									if (edge.Value.TargetIncomingStateVar.HasValue) {

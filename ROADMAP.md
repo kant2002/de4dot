@@ -1210,8 +1210,20 @@ edge case, so it cannot simply be withdrawn. A fix has to make the fallback *sou
 or verify the resulting edge against something) rather than remove it. Anything that only declines
 will land here again.
 
-**`0 failed` is still the part to fix first**, and this measurement sharpens why: the count is wrong in
-a way that cannot be corrected by refusing to resolve.
+**`0 failed` is fixed, and it was a bookkeeping fault rather than a behavioural one.** The two things
+were conflated in the reverted attempt: *not producing* the guessed edge collapses resolution, but
+*producing it without counting it as derived* changes no output at all. Phase 3's fallback now
+increments a separate `GuessedCount`, and the per-method line reads
+
+    XOR-switch [M]: 1 dispatches, 5 edges resolved, 1 guessed, 0 failed, 6 applied, 0 dead cases
+
+where it used to claim `6 edges resolved, 0 failed` for a machine that cannot terminate. The resolver
+can now contradict itself, which it could not while a guess counted as a derivation — and that is why
+the defect was previously visible only to an external trace.
+
+It also sizes the problem: **S1 alone applies 61 guessed edges**. That is the measurement to beat, and
+it confirms from the other direction why withdrawing the guess is not available. Gates, export and the
+snapshot are untouched, because nothing about the output changed.
 
 Original reasoning, still valid: The resolver reports complete success on a machine that cannot
 terminate. A fallback that cannot distinguish a derived edge from a plausible one should not be
