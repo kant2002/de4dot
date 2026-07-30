@@ -254,6 +254,17 @@ verifiable and terminating passes every gate, and shows up in the readability si
 improvement. Demonstrated by the abandoned opaque-predicate fold (§7 item 4) — read it before
 trusting any change whose evidence is "fewer instructions, fewer unresolved dispatches".
 
+> **The rule these gates do not enforce on their own:**
+> **a green result is only meaningful if the measurement actually covers the property the change can
+> affect.**
+>
+> This has now cost two reverts of *correct* work in the same session, in two different disguises: a
+> fix that removed 274 fields and moved nothing else read as a no-op because the printed summary
+> omitted the field count, and a comparison drawn between artifacts produced outside the shared
+> pipeline, which were not comparable to each other at all. Neither was a gate failing; both were a
+> gate not looking. Before accepting any change, name the property it can affect and check that
+> something observes it — and if nothing does, that is the first thing to build, not the last.
+
 **Gate 1** — see §2 for the two caveats (complete reference set; compare against the original).
 
 **Gate 4 caveat.** A valid exit is `ret` **or** `throw`/`rethrow`. Counting only `ret` reports false
@@ -725,6 +736,18 @@ Ordered by value. Each step must hold every gate in §4.
       total emitted instructions.
    7. **Fail-closed when single-entry ownership cannot be proven** — refuse the region, not just the
       block, and leave the method to the existing path.
+
+   #### What must be observed, beyond the correctness gates
+
+   The gates in §4 cannot see most of what region specialisation can get wrong, so each of these
+   needs its own explicit observation before the work is trusted:
+
+   - **ownership** — every internal block had no predecessor outside the region;
+   - **specialisation count** — copies actually made, per region and in total;
+   - **emitted growth** — blocks and instructions added, against the declared caps;
+   - **stack preservation across every internal edge**, not only at the region boundary;
+   - **rejection-set identity** — the set, never the count;
+   - **`CloneSystem`'s activation branch** — present by name, not inferred from a count.
 
    #### Acceptance for the next attempt
 
