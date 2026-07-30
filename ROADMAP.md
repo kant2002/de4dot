@@ -1092,6 +1092,162 @@ what has to stop at a dispatch boundary**; who wins a collision is a symptom.
 
 Two of two, one cause, one place to fix it.
 
+### #17 fixed in attribution — one method resolved, one still failing later
+
+`BuildBlockToCase` stopped at the dispatch *under analysis* but walked straight through any **other**
+switch. It no longer expands through one; the block stays claimed, only the traversal ends. Ending the
+traversal is what addresses both cases, where preferring the direct claim would have fixed S3 and left
+S1 — they collided in opposite directions.
+
+Attribution is now correct in both. The exit blocks that used to go ambiguous no longer do, and the
+only ambiguity left in S1 is the other dispatch block itself, which is never expanded through.
+
+**S3 resolves correctly and is no longer rejected. S1 still is.** Its attribution is right and its
+machine still cannot terminate, so the remaining defect is downstream of attribution — one of wrong
+incoming-state provenance, an edge omitted from the plan, or a correct edge replaced later in
+`SwitchRewriter`. #16's containment still catches it, so nothing unfaithful ships.
+
+The cost, measured rather than assumed, and it is not all one way:
+
+| | before | after |
+|---|---|---|
+| opaque-predicate dispatch sites | 13 | 1 |
+| total lines | 65702 | 65551 |
+| switch dispatch sites | 44 | 47 |
+| goto statements | 84 | 129 |
+| undecidable machines (gate 5) | 2 | 4 |
+
+A more conservative map attributes fewer blocks, so fewer edges resolve and some dispatch survives.
+That is the trade this project has already decided: an unresolved dispatch is recoverable, a wrongly
+resolved one is not. Gates, ceilings and the landmark all hold, and rejections went `1/0/1` to `1/0/0`.
+
+**The undecidable set must be compared by identity, not by count.** It went 2 → 4, which reads as two
+new. It is three:
+
+| | before | after |
+|---|---|---|
+| S1 `RevertManager` | undecidable | undecidable (still rejected) |
+| S3 `InterruptQueue` | undecidable | **resolved — left the set** |
+| S2 `NewIdentifier` | — | **new** |
+| S3 `DisableAnnotation` | — | **new** |
+| S3 `CustomizeVisitor` | — | **new** |
+
+Three methods entered the category the last defect hid in, and one left it. A net of +2 concealed that,
+which is the argument for diffing identities whenever this set moves.
+
+**S2 `NewIdentifier`: faithful, more verbose.** Reviewed against the deobfuscated IL. Its `switch` is
+a genuine source-level switch on a method *parameter* — three logging severities, each branching to the
+same `ret` — not dispatch at all. The surrounding `while (true)` with `default: continue` is the
+obfuscator's fallthrough edge rendered faithfully, and it can only spin for an enum value outside the
+three that exist. The exit is reachable from every real case; there is no dead-exit signature. It is in
+the undecidable set because the scanner pattern-matches `switch` bodies and cannot tell a parameter
+switch from a state machine.
+
+That is worth noting beyond this one method: a `switch` surviving into the output is not evidence of
+unresolved obfuscation, and the undecidable set will always contain some methods that were never
+dispatch to begin with.
+
+**S3 `DisableAnnotation`: faithful.** Every case breaks the switch and a `break` after it leaves the
+`while (true)`; the `default: continue` is unreachable because the state is seeded 0 and only ever set
+to 1, 2 or 3.
+
+**S3 `CustomizeVisitor`: faithful.** A six-way switch on a toolbar selection index where every case
+`return`s. Like `NewIdentifier`, a genuine source-level switch rather than dispatch.
+
+**All three are faithful, and the pattern is the finding.** None is a damaged machine; each is either a
+real source-level switch or a small machine that exits normally, wrapped in the obfuscator's
+`while (true)` shell whose out-of-range arm is unreachable. The scanner flags them because it
+pattern-matches `while (true)` + `switch`, which is a shape shared by both.
+
+The practical consequence: **the size of the undecidable set is not a defect count**, and treating a
+rise in it as a regression will mislead. What distinguishes a damaged machine is specific and cheap to
+test — an exit that is a switch target no reachable state selects. All three of these have exits
+reachable from every real input.
+
+That satisfies the acceptance conditions for landing the attribution fix:
+
+| condition | state |
+|---|---|
+| new undecidable methods verified faithful | all three |
+| no unexplained changed methods | `goto` rise traced to two, call targets intact |
+| S3 `InterruptQueue` resolved correctly | yes, left the rejection set |
+| S1 `RevertManager` safely rejected | yes, containment holds |
+| gates and landmark green | yes |
+| readability regression documented | above, with per-method attribution |
+
+#### S1's remaining defect: a guessed seed, and an edge nobody notices is missing
+
+The post-fix trace narrows it to two of the three candidates, and they are the same root.
+
+Derived edges target cases **5, 3, 4, 0 and 6 — never case 1**, which is the block holding `ret`. So
+the exit edge is **omitted**, not replaced later: `SwitchRewriter` applies exactly the six edges it is
+given (`6 resolved, 0 failed, 6 applied`), and there is no seventh to replace.
+
+Why it is missing is the second cause. Three of those six edges come from the phase-3 fallback:
+
+    seed=90904322 (from allSeeds, FIRST THAT RESOLVES AT ALL (pred has no owning case)) -> case=6
+
+When a predecessor has no owning case, phase 3 tries every candidate seed in enumeration order and
+keeps the first that resolves to *any* valid case index. That is a guess dressed as a derivation —
+"resolves" only means the arithmetic lands in range — and all three guesses landed on case 6. The
+predecessor that should reach case 1 is among the unattributed, so it was guessed elsewhere instead.
+
+**Making the fallback decline was tried, measured and reverted.** It works, and the cost is
+unacceptable. Refusing every predecessor with no owning case removes the guessed edges, so S1 stops
+producing a bad candidate entirely and **rejections go `1/0/0` → `0/0/0`** — nothing needs containment
+any more, and gates stay green. But it takes most of dispatch resolution with it:
+
+| | before | after |
+|---|---|---|
+| goto statements | 129 | 1772 |
+| opaque-predicate dispatch sites | 1 | 226 |
+| undecidable machines | 4 | 22 |
+| total lines | 65551 | 73491 |
+
+A 13× rise in `goto` is this section's own documented failure mode — a corpus-wide collapse of
+resolution — and the reverted work is the result: the guess is load-bearing for most methods, not an
+edge case, so it cannot simply be withdrawn. A fix has to make the fallback *sound* (derive the seed,
+or verify the resulting edge against something) rather than remove it. Anything that only declines
+will land here again.
+
+**`0 failed` is still the part to fix first**, and this measurement sharpens why: the count is wrong in
+a way that cannot be corrected by refusing to resolve.
+
+Original reasoning, still valid: The resolver reports complete success on a machine that cannot
+terminate. A fallback that cannot distinguish a derived edge from a plausible one should not be
+counted as resolved, and while it is, no internal signal will ever show this. That also explains why
+the defect needed an external tracer to find at all.
+
+So: **wrong incoming-state provenance, producing an omitted edge.** Not later replacement. The fix
+belongs with phase 3's fallback, and §5's warning still applies — this is the attribution/seed
+machinery where a previous rewrite collapsed resolution corpus-wide.
+
+Still open, and not blocking the landing:
+each needs comparing against the original IL and classifying as faithful-but-more-verbose, already
+damaged by an earlier partial resolution, or genuinely uncertain. The `goto 84 → 129` rise **is checked** and is not
+what it looks like.
+
+#### The goto rise: two methods, no payload lost
+
+It is not spread across the corpus. Two methods account for almost all of it — S2 `SetupRef` (0 → 24)
+and S1 `ConnectRequest` (0 → 22), plus one smaller site — and several files got *better*. Both were
+fully resolved before and are unresolved now.
+
+Both have the **same 11 distinct call targets before and after**, at +39 lines each. So no live payload
+was dropped; the difference is presentational, `goto` in place of structured flow. That is the failure
+mode worth ruling out here, because a wrong resolution deletes a tail and deleted statements show up
+as call targets that vanish. Note the limit: matching distinct targets does not prove matching order or
+call count, so a reordering would pass this check.
+
+Two aggregate readings to retire while here. `while (true)` did **not** increase — it went 52 → 49, and
+`switch (` went 113 → 102. Only `goto` rose. And no exit-less loop is demonstrable anywhere in the
+tree: the C# scanner reports `LOOPS: 0` and the IL tracer `non-terminating=0`, independently. What
+remains is 4 unproven, which is this item.
+
+Also unfinished: S1's remaining defect is downstream of attribution and has not been narrowed further
+between incoming-state provenance, an omitted derived edge, and a later edge replacement in
+`SwitchRewriter`.
+
 Queued as WORKLOG #16.
 
 > The levers were added for this and are worth keeping: `DE4DOT_NO_XORSWITCH` had been referenced by

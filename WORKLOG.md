@@ -73,9 +73,25 @@ Run order and each gate's blind spot: ROADMAP §4.
 - [ ] **17.** The per-site resolver still *produces* that bad rewrite; #16 only stops it shipping.
   **Diagnosed, both methods: wrong case attribution.** The per-case BFS traverses through a second
   dispatch and reaches an exit block it does not own; the collision marks it ambiguous and aborts the
-  search, so no edge to the exit is derived. Fix the traversal (stop at a dispatch boundary), not the
-  collision rule — the two differ in which case claims first. `DispatchDetector`; ROADMAP §7a, and §5
-  first — a dominance-based rewrite of attribution was already tried and reverted.
+  search, so no edge to the exit is derived. **Attribution fixed** — the per-case BFS no longer expands
+  through another dispatch, and both exits now attribute correctly. S3 resolves and is no longer
+  rejected; **S1 narrowed: wrong incoming-state provenance producing an omitted edge** — phase 3's
+  fallback takes the first seed that resolves to any in-range case when a predecessor has no owning
+  case, and the edge to the exit is never derived while the resolver reports `0 failed`. Not later
+  replacement. Making that fallback decline was **built, measured, reverted** — it clears the rejection
+  entirely but costs `goto` 129→1772; the guess is load-bearing corpus-wide, so the fix must make it
+  sound rather than remove it. ROADMAP §7a.
+  Costs some resolution (dispatch sites 44→47, gotos 84→129), which is the accepted trade. ROADMAP §7a.
+
+- [ ] **18.** Review the undecidable set the way #16's two were reviewed. Diffed by identity: it is
+  **three new** (`NewIdentifier`, `DisableAnnotation`, `CustomizeVisitor`), not two — `InterruptQueue`
+  left the set, so the 2→4 count hid one. `NewIdentifier` reviewed: **faithful, more verbose** — its
+  **all three reviewed and faithful** — each is a real source-level switch or a machine that
+  exits normally, inside the obfuscator's `while (true)` shell. The set's size is not a defect count. The goto rise is checked: two methods
+  (`SetupRef`, `ConnectRequest`) carry it, both keep every call target, so no payload was lost;
+  `while (true)` fell 52→49. Classify each against the original IL, check the methods
+  behind `goto 84→129` for dropped payload, and hold #17's attribution fix (plus the matching export
+  and snapshot commits) until then. ROADMAP §7a.
 
 Add new work here rather than reopening a closed item; if a closed finding turns out to be
 wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.

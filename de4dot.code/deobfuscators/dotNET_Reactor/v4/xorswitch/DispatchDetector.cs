@@ -305,6 +305,28 @@ static class DispatchDetector {
 				if (trace)
 					XorSwitchTrace.Log($"  attribution: {XorSwitchTrace.Id(block)} <- case {caseIdx} via {DescribeRoute(block, parent, targets[caseIdx])}");
 
+				// Do not walk THROUGH another dispatch. Which successor a switch takes depends on the
+				// state value arriving at it, not on the case that reached the switch, so everything
+				// past it gets attributed to whichever case the iteration happened to reach first --
+				// the map becomes an artifact of enumeration order rather than of the control flow.
+				//
+				// That is not a theoretical worry: both known mis-resolutions came from a search
+				// crossing a second dispatch and landing on an exit block that another case directly
+				// owns. The collision marked the exit ambiguous, the search stopped, and no edge
+				// selecting it was ever derived -- so the emitted machine could not terminate while
+				// its `ret` sat there as a still-reachable switch target.
+				//
+				// The block itself stays claimed; only the traversal stops. Note the two known cases
+				// collided in OPPOSITE directions -- once the crossing case claimed the exit first,
+				// once the direct owner did -- so preferring the direct claim would have fixed one and
+				// left the other. Ending the traversal is what addresses both.
+				if (block != switchBlock && block.LastInstr is not null &&
+						block.LastInstr.OpCode.Code == Code.Switch) {
+					if (trace)
+						XorSwitchTrace.Log($"  attribution: {XorSwitchTrace.Id(block)} is another dispatch; not expanding through it");
+					continue;
+				}
+
 				foreach (var succ in block.GetTargets()) {
 					if (visited.Add(succ)) {
 						parent[succ] = block;
