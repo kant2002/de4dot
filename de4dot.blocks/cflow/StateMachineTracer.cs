@@ -17,14 +17,24 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 
 namespace de4dot.blocks.cflow {
 	public enum StateMachineVerdict {
-		/// <summary>The traced state sequence reaches a ret/throw. Faithful, however verbose.</summary>
-		Terminates,
+		/// <summary>
+		///     An exit is reachable somewhere in the over-approximated machine.
+		///
+		///     Deliberately NOT called Terminates, because it does not prove that. Exploration widens
+		///     on every imprecision — an unknown switch operand takes every target — so reaching a
+		///     `ret` down one of those targets says only that an exit exists in a machine that is a
+		///     superset of the real one. Another explored target may loop forever. This is the absence
+		///     of a non-termination proof, not the presence of a termination proof, and a count of
+		///     these must not be read as "this many methods terminate".
+		/// </summary>
+		ExitReachable,
 
 		/// <summary>
 		///     The traced state sequence revisits a state without ever reaching an exit, i.e. the
@@ -58,26 +68,59 @@ namespace de4dot.blocks.cflow {
 	///     it. Every other gate is therefore blind to it, and the damage is invisible in the output:
 	///     the method just looks *shorter*, because every statement on the unreachable tail is gone.
 	///
-	///     Only following the state variable from its seed reveals it, which is what this does.
+	///     Why it is an over-approximation, not a walk
+	///     -------------------------------------------
+	///     This used to follow a single concrete path and give up at the first condition it could not
+	///     fold — which is any real `brfalse` on a field. Real machines interleave dispatch with
+	///     ordinary conditionals, so that answered Undecidable for exactly the methods worth judging,
+	///     and two whose exit case was unreachable sat in that bucket while every gate passed.
 	///
-	///     Deliberately conservative
-	///     -------------------------
-	///     Anything it cannot decide is <see cref="StateMachineVerdict.Undecidable"/>, never
-	///     <see cref="StateMachineVerdict.Loops"/>. A Loops verdict is meant to be trustworthy enough
-	///     to act on -- to fail a build, or to reject a rewrite -- so it must never be a guess.
-	///     Conditional branches whose condition is not a known constant, switch operands that are not
-	///     known constants, and traces that exceed the step budget all yield Undecidable.
+	///     So it explores a bounded set of *configurations* (block + evaluation stack + tracked
+	///     locals) instead, and every imprecision widens the set rather than ending the walk: an
+	///     unknown branch condition takes both successors, an unknown switch operand takes every
+	///     target, and an instruction that will not emulate contributes all successors with everything
+	///     unknown. That direction is the whole point. The reachable set is a superset of what can
+	///     really happen, so **if no exit appears anywhere in it, no execution can exit** — which makes
+	///     a Loops verdict a proof rather than a guess. The cost is the reverse: imprecision can make a
+	///     genuinely looping method look terminating, and missing a bad resolution is the failure this
+	///     is allowed to have. Rejecting a good one is not.
+	///
+	///     Undecidable therefore means one thing only: a budget ran out, so the set was never
+	///     completed and neither conclusion is available.
 	/// </summary>
 	public static class StateMachineTracer {
-		const int maxSteps = 512;
+		// Caps. Exhausting any of them yields Undecidable rather than a conclusion drawn from a partial
+		// exploration, which would be a guess wearing a proof's clothes.
+		const int MaxConfigurations = 4096;
+		const int MaxStackDepth = 16;
+		const int MaxTrackedLocals = 16;
+
+		/// <summary>An abstract evaluation stack/local slot: a known int32, or unknown.</summary>
+		readonly struct Slot {
+			public readonly int Value;
+			public readonly bool Known;
+			Slot(int value, bool known) { Value = value; Known = known; }
+			public static readonly Slot Unknown = new Slot(0, false);
+			public static Slot Of(int value) => new Slot(value, true);
+			public override string ToString() => Known ? Value.ToString() : "?";
+		}
+
+		sealed class Configuration {
+			public readonly Block Block;
+			public readonly Slot[] Stack;
+			public readonly Slot[] Locals;
+			public readonly string Key;
+
+			public Configuration(Block block, Slot[] stack, Slot[] locals) {
+				Block = block;
+				Stack = stack;
+				Locals = locals;
+				Key = block.GetHashCode() + "|" + string.Join(",", stack) + "|" + string.Join(",", locals);
+			}
+		}
 
 		/// <summary>
 		///     Trace <paramref name="method"/>'s dispatch machine from the method entry.
-		///
-		///     One emulator is carried across the whole walk on purpose: in the shape this is meant to
-		///     catch, the state is carried on the **evaluation stack** (each predecessor pushes a
-		///     constant that the shared `switch` pops), not in a local. Re-initialising per block would
-		///     lose exactly the value being traced.
 		/// </summary>
 		public static StateMachineTrace Trace(Blocks blocks, MethodDef method) {
 			var result = new StateMachineTrace { Verdict = StateMachineVerdict.Undecidable };
@@ -85,78 +128,171 @@ namespace de4dot.blocks.cflow {
 			if (all.Count == 0)
 				return result;
 
-			var emu = new InstructionEmulator();
-			emu.Initialize(method, true);
+			int localCount = method.Body?.Variables?.Count ?? 0;
+			if (localCount > MaxTrackedLocals)
+				localCount = MaxTrackedLocals;
 
-			// (switch block, operand value) is a complete description of the machine's state at a
-			// dispatch: the continuation from there is deterministic, so seeing the same pair twice
-			// means the machine cannot make further progress.
-			var seenAtSwitch = new HashSet<(Block, int)>();
-			var current = all[0];
+			var seen = new HashSet<string>();
+			var work = new Stack<Configuration>();
+			void Schedule(Block block, Slot[] stack, Slot[] locals) {
+				if (block is null || stack.Length > MaxStackDepth)
+					return;
+				var config = new Configuration(block, stack, locals);
+				if (seen.Add(config.Key))
+					work.Push(config);
+			}
 
-			for (int step = 0; step < maxSteps; step++) {
-				if (current is null)
-					return result;
+			var noLocals = new Slot[localCount];
+			for (int i = 0; i < localCount; i++)
+				noLocals[i] = Slot.Unknown;
+			Schedule(all[0], new Slot[0], noLocals);
 
-				var instrs = current.Instructions;
+			int explored = 0;
+			while (work.Count > 0) {
+				if (++explored > MaxConfigurations)
+					return result;			// never completed the set: Undecidable, not a conclusion
+
+				var config = work.Pop();
+				var instrs = config.Block.Instructions;
 				int end = instrs.Count;
 
-				// A block that can end the method ends the trace: an exit is genuinely reached.
+				// An exit anywhere in the reachable set ends the search: it rules OUT the only
+				// verdict that can be proven here. It does not establish that the method terminates.
+				bool exits = false;
 				foreach (var instr in instrs) {
 					switch (instr.OpCode.Code) {
 					case Code.Ret:
 					case Code.Throw:
 					case Code.Rethrow:
-						result.Verdict = StateMachineVerdict.Terminates;
-						return result;
+						exits = true;
+						break;
 					}
+					if (exits)
+						break;
+				}
+				if (exits) {
+					result.Verdict = StateMachineVerdict.ExitReachable;
+					return result;
 				}
 
 				bool endsInSwitch = end > 0 && instrs[end - 1].OpCode.Code == Code.Switch;
 				bool endsInBranch = end > 0 && (instrs[end - 1].IsBr() || instrs[end - 1].IsConditionalBranch());
 				int emulateTo = endsInSwitch || endsInBranch ? end - 1 : end;
 
-				try {
-					emu.Emulate(instrs, 0, emulateTo);
-				}
-				catch {
-					return result; // emulation failed: undecidable, and that is the safe answer
+				Slot[] outStack, outLocals;
+				bool emulated = TryEmulate(method, config, instrs, emulateTo, localCount,
+					out outStack, out outLocals);
+				if (!emulated) {
+					// Could not model it. Widen instead of stopping: everything unknown, every
+					// successor scheduled. That keeps the set an over-approximation, which is the only
+					// property a Loops verdict depends on.
+					ScheduleAllSuccessors(config.Block, Schedule, new Slot[0], AllUnknown(localCount));
+					continue;
 				}
 
 				if (endsInSwitch) {
 					result.SwitchOffset = instrs[end - 1].Instruction?.Offset ?? 0;
-					if (emu.StackSize() < 1)
-						return result;
-					if (emu.Pop() is not Int32Value iv || !iv.AllBitsValid())
-						return result; // operand not a known constant
+					var targets = config.Block.Targets;
+					var operand = outStack.Length > 0 ? outStack[outStack.Length - 1] : Slot.Unknown;
+					var rest = outStack.Length > 0 ? Take(outStack, outStack.Length - 1) : outStack;
 
-					int state = iv.Value;
-					result.States.Add(state);
-
-					var targets = current.Targets;
-					if (targets is null || state < 0 || state >= targets.Count) {
-						// Out of range means the default (fall-through) target is taken.
-						current = current.FallThrough;
+					if (!operand.Known || targets is null) {
+						// Unbounded operand: every target stays possible, so every target is taken.
+						ScheduleAllSuccessors(config.Block, Schedule, rest, outLocals);
 						continue;
 					}
-
-					if (!seenAtSwitch.Add((current, state))) {
-						// Same dispatch, same operand, and no exit seen on the way here.
-						result.Verdict = StateMachineVerdict.Loops;
-						return result;
-					}
-
-					current = targets[state];
+					int state = operand.Value;
+					result.States.Add(state);
+					if (state < 0 || state >= targets.Count)
+						Schedule(config.Block.FallThrough, rest, outLocals);
+					else
+						Schedule(targets[state], rest, outLocals);
 					continue;
 				}
 
-				if (endsInBranch && instrs[end - 1].IsConditionalBranch())
-					return result; // condition not folded: undecidable rather than a guess
+				if (endsInBranch && instrs[end - 1].IsConditionalBranch()) {
+					// The condition is not tracked here -- only int32 dataflow is -- so both sides are
+					// live. Over-approximating a two-way branch is cheap and keeps the proof valid.
+					ScheduleAllSuccessors(config.Block, Schedule, outStack, outLocals);
+					continue;
+				}
 
-				current = current.GetOnlyTarget();
+				Schedule(config.Block.GetOnlyTarget(), outStack, outLocals);
 			}
 
-			return result; // step budget exhausted
+			// The set is complete and contains no exit. Nothing the method can do returns.
+			result.Verdict = StateMachineVerdict.Loops;
+			return result;
 		}
+
+		static Slot[] AllUnknown(int count) {
+			var slots = new Slot[count];
+			for (int i = 0; i < count; i++)
+				slots[i] = Slot.Unknown;
+			return slots;
+		}
+
+		static Slot[] Take(Slot[] source, int count) {
+			var slots = new Slot[count];
+			for (int i = 0; i < count; i++)
+				slots[i] = source[i];
+			return slots;
+		}
+
+		static void ScheduleAllSuccessors(Block block, Action<Block, Slot[], Slot[]> schedule,
+				Slot[] stack, Slot[] locals) {
+			if (block.Targets is not null) {
+				foreach (var target in block.Targets)
+					schedule(target, stack, locals);
+			}
+			schedule(block.FallThrough, stack, locals);
+		}
+
+		/// <summary>
+		///     Run one block from <paramref name="config"/>'s incoming state and read the outgoing
+		///     stack and locals back out. False means the block could not be modelled at all.
+		/// </summary>
+		static bool TryEmulate(MethodDef method, Configuration config, IList<Instr> instrs, int emulateTo,
+				int localCount, out Slot[] outStack, out Slot[] outLocals) {
+			outStack = new Slot[0];
+			outLocals = AllUnknown(localCount);
+			try {
+				var emu = new InstructionEmulator();
+				emu.Initialize(method, true);
+				emu.ClearStack();
+				foreach (var slot in config.Stack)
+					emu.Push(slot.Known ? new Int32Value(slot.Value) : (Value)Int32Value.CreateUnknown());
+				for (int i = 0; i < localCount; i++) {
+					var local = method.Body.Variables[i];
+					if (config.Locals[i].Known)
+						emu.SetLocal(local, new Int32Value(config.Locals[i].Value));
+					else
+						emu.MakeLocalUnknown(local);
+				}
+
+				emu.Emulate(instrs, 0, emulateTo);
+
+				int depth = emu.StackSize();
+				if (depth > MaxStackDepth)
+					return false;
+				var stack = new Slot[depth];
+				// Pop reverses, so fill from the top down and hand back bottom-first.
+				for (int i = depth - 1; i >= 0; i--)
+					stack[i] = ToSlot(emu.Pop());
+				outStack = stack;
+
+				var locals = new Slot[localCount];
+				for (int i = 0; i < localCount; i++)
+					locals[i] = ToSlot(emu.GetLocal(method.Body.Variables[i]));
+				outLocals = locals;
+				return true;
+			}
+			catch {
+				return false;
+			}
+		}
+
+		static Slot ToSlot(Value value) =>
+			value is Int32Value iv && iv.AllBitsValid() ? Slot.Of(iv.Value) : Slot.Unknown;
 	}
 }

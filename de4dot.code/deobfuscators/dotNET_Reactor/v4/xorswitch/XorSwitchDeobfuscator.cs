@@ -17,6 +17,7 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using de4dot.blocks;
@@ -45,7 +46,16 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 
 
 
+	// Bisect lever: turn this whole pass off for one run, so "did XOR-switch resolution cause it?" is
+	// answerable by comparing two outputs rather than by rebuilding with an edit. External tooling has
+	// documented this variable for some time; it was never actually read, which made an A/B against it
+	// silently compare two identical runs.
+	static readonly bool Disabled = Environment.GetEnvironmentVariable("DE4DOT_NO_XORSWITCH") == "1";
+
 	public bool Deobfuscate(List<Block> allBlocks) {
+		if (Disabled)
+			return false;
+
 		if (XorSwitchTrace.Wants(_blocks.Method))
 			XorSwitchTrace.BeginMethod(_blocks.Method!);
 

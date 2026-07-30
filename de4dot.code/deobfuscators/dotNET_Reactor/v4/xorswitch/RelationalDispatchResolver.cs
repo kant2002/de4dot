@@ -147,8 +147,13 @@ static class RelationalDispatchResolver {
 		return region;
 	}
 
+	// Bisect lever, same purpose as DE4DOT_NO_XORSWITCH but narrowed to this pass: it lets a defect be
+	// attributed to relational resolution or to the per-site resolver below it, which are different
+	// machinery with different failure modes.
+	static readonly bool Disabled = Environment.GetEnvironmentVariable("DE4DOT_NO_RELATIONAL") == "1";
+
 	public static bool TryResolve(Blocks blocks, List<Block> allBlocks) {
-		if (allBlocks.Count == 0)
+		if (Disabled || allBlocks.Count == 0)
 			return false;
 
 		var sites = new HashSet<Block>();

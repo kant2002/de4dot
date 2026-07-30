@@ -765,10 +765,36 @@ Ordered by value. Each step must hold every gate in §4.
 
    **The export was then reviewed method by method against the original binary**, not against the
    previous export. Nine changed decompiled methods reduce to six IL methods (a decompiler inlines a
-   lambda body into every call site, so one changed method can appear as several); five are faithful
-   outright and one is faithful conditional on the module-constant fold, with its alternative trace
-   recorded. Downstream tooling grew a changed-method deriver and a read-only original-machine trace
-   generator to make that review reproducible rather than a one-off reading.
+   lambda body into every call site, so one changed method can appear as several); **all six are
+   faithful.** The sixth was initially only conditionally faithful, because its branch depends on
+   constants that `CflowConstantsInliner` folds out of `<Module>{guid}` static fields, which at the
+   time it did without checking that those fields are ever written. The premise was verified
+   independently: the constants are derivable from the original binary's arithmetic, they select the
+   branch the export took, and the initialiser that stores them is called from its own type's
+   `.cctor` — so the CLR runs it before the first read of any field on that type, which is exactly
+   the reads being folded. The premise holds structurally
+   rather than by luck — Reactor puts the fields and the initialiser on one type — and the pass now
+   enforces it rather than assuming it: it folds only when the declaring type's `.cctor` calls the
+   initialiser, and leaves the constants alone otherwise. Counting callers would not do, because a
+   call from an ordinary method gives no ordering guarantee at all; that distinction is what the
+   `cflow_called_outside_cctor` fixture exists to hold in place. The corpus cannot test any of this,
+   since all three assemblies already have the justified shape.
+
+   The check runs **during** selection rather than after it (WORKLOG #15): a candidate that fails
+   loses its turn and the search continues, so an assembly whose second shape match is the real
+   initialiser still folds. Vetoing the first match instead would have forfeited it silently. What
+   makes that affordable is the check's scope — one `.cctor` body scan, no module walk — and the
+   module-wide referrer scan survives only to explain a refusal, never to decide one. Severity
+   carries the distinction: a candidate skipped while another qualified is verbose detail, whereas
+   finishing selection having folded nothing is a warning, because the pass silently did not run.
+
+   Two limits remain, both deliberate and neither reached by the corpus. It matches **direct** calls
+   only, so a `.cctor` reaching the initialiser through a helper is refused — a false negative
+   costing readability, where widening it would mean proving the intermediate call happens. And, the
+   one to keep in view because it runs the other way, it does not establish that the `.cctor`'s call
+   or the stores are **unconditional**, so it still accepts on an assumption. Both are straight-line
+   in every sample, and a conditional store is `Find()`'s problem to notice rather than the check's —
+   but it means this narrowed the unproven premise rather than eliminating it.
 
    #### Acceptance for the next attempt
 
@@ -781,8 +807,8 @@ Ordered by value. Each step must hold every gate in §4.
      still passing.
    - Emitted growth stays inside the declared caps.
 
-   **Fixtures: done.** `tests/run_xorswitch_tests.py` plus three fixtures under
-   `tests/samples/xorswitch/`, 3/3 passing. Portable, because `test.ps1` cannot run outside Windows
+   **Fixtures: done.** `tests/run_reactor_tests.py` plus the dispatch fixtures under
+   `tests/samples/xorswitch/`, all passing. Portable, because `test.ps1` cannot run outside Windows
    and its byte-comparison against checked-in `.cleaned.il` is not reproducible across ildasm builds;
    these assert what the resolver *decided* instead.
 
@@ -874,19 +900,205 @@ Ordered by value. Each step must hold every gate in §4.
    **Closed**: the actionable part is done, the residual is presentation, and 15 sites does not
    justify a new IL pass.
 
-   > The measurement is `analyze_closures.py` in the downstream tooling, and it is the reason this
-   > entry could be settled at all. It also caught the reverse error: the fix above was briefly
-   > reverted because the acceptance check's *printed* summary omitted the field count, so a change
-   > that removed 274 fields and moved nothing else was eyeballed as "no effect". The JSON had it all
-   > along. Two lessons, both already paid for: a readability claim needs a metric that can see the
-   > thing it claims, and "no change" from a check that does not measure the change is not evidence.
+   > A metric that splits surviving closure types by *cause* — obfuscator residue against decompiler
+   > limitation — is the reason this entry could be settled at all. It also caught the reverse
+   > error: the fix above was briefly reverted because the acceptance check's *printed* summary
+   > omitted the field count, so a change that removed 274 fields and moved nothing else was
+   > eyeballed as "no effect". The JSON had it all along. Two lessons, both already paid for: a
+   > readability claim needs a metric that can see the thing it claims, and "no change" from a check
+   > that does not measure the change is not evidence.
 
 ### Definition of done
 
 - Gates 1–5 all zero across the corpus.
-- Every remaining unresolved dispatch is *faithful* — verified by the state trace, not assumed.
+- Every remaining unresolved dispatch is *faithful* — verified by the state trace, not assumed. §7a is
+  the work on this criterion. The trace can now judge nearly all of them (undecidable 68 → 4 across the
+  corpus) and rejects the two candidates it proves cannot terminate, so no known unfaithful dispatch
+  ships; what remains is that the resolver still produces them (WORKLOG #17).
 - No pass can produce output that passes gates 1–4 while being semantically wrong; i.e. gate 5 is
   in-tree and enforced, rather than left to whatever inspects the output afterwards.
+
+---
+
+## 7a. Open defect: "undecidable" hides methods that cannot terminate
+
+Gate 5 sorts each dispatch into terminating, non-terminating, or **undecidable**, and passes on
+`non-terminating == 0`. The corpus sits at `0 / 0 / 16`, `0 / 0 / 14`, `0 / 0 / 38`. The undecidable
+bucket was read as "the tracer could not decide, and the output is probably fine". It is not: the two
+methods that survive as visible `while (true) { switch }` bodies in a decompiled S1 and S3 were both
+checked, and **both cannot terminate**.
+
+The check is mechanical, which is the important part. Once a dispatch is resolved to a plain switch,
+collect every state value the method ever pushes — `ldc.i4 N` feeding the switch, directly or through
+the state local. Any case target that no pushed value selects is unreachable. In both methods the
+unreachable target is the only one carrying `ret` (S1) or the `leave` out of the protected region
+(S3), and the remaining states form a closed cycle that re-executes side effects forever:
+
+    S1  switch (b, d, c, e, RET, f, g, b, a, d, b, h)   pushed: 11 6 10 1 2 0 5 3 9   -- never 4
+    S3  switch (b, LEAVE, c, d, e, b, c)                pushed: 2 5 4 3 0             -- never 1
+
+Both **originals reach `ret`**, established with an external trace over the original IL rather than
+by assuming it. So this is unfaithful output, not an obscure input.
+
+What it means for the gate hierarchy: gates 1–7 all pass on both methods. Gate 1 is satisfied because
+the IL verifies, gate 4 because a `ret` is *present* — it just cannot be reached. Non-termination is
+exactly the property the gate hierarchy was built to catch (§3 #4d), and undecidable turns out to be
+the hole it walked back in through. Two of two is not a sample that supports calling this rare.
+
+### Which pass — bisected, and it is not the obvious one
+
+The suspect was opaque-predicate resolution folding a predicate to the wrong side. **That is refuted.**
+Three levers, all default-off, each run against the same method:
+
+| lever | result |
+|---|---|
+| `DE4DOT_NO_CFLOW_CONSTANTS=1` | predicates survive unfolded — and *both* sides still lead back into the cycle. `ret` stays unreachable. |
+| `DE4DOT_NO_RELATIONAL=1` | output **byte-identical** to baseline: same switch table, same pushed values, same unreachable `ret`. |
+| `DE4DOT_NO_XORSWITCH=1` | the raw affine machine survives intact and `ret` is a live switch target. |
+
+So the exit state is lost in **per-site XOR-switch resolution** — the `EdgeResolver` / `SwitchRewriter`
+path of §5, not the constant fold and not relational resolution. The constant-fold result is the
+informative one: with the fold off the predicate is still there, and neither of its successors reaches
+the exit, so the wrong-branch theory cannot account for it. Whatever drops the transition does so
+before any predicate is decided.
+
+Worth noting what this rules in: §5 is the section describing why a dispatch predecessor's entry state
+is not representable, and the two failure modes recorded there — a wrong seed and a wrong case
+attribution — both produce exactly this shape, a state that is never pushed and a case that is
+therefore dead.
+
+### The guard already exists, and the hole is in what it can decide
+
+`SelectDispatchCandidate` (§6) already does what a protection mechanism for this would do: it builds
+the method both ways and keeps the unresolved form when `NeverTerminates` says the resolved one does
+not run. It did not fire here because it rejects only on a `Loops` verdict, and both methods trace as
+**`Undecidable`** — the same blind spot as gate 5, for the same reason, since it is the same tracer.
+So this does not need a second guard bolted alongside it. It needs the existing one to be able to
+decide these cases.
+
+**A plain reachability walk is not that, and it was tried.** Seeding entry plus handler starts and
+following branch, switch and fallthrough edges, then asking whether any `ret`/`throw`/`jmp` is
+reachable, is sound — and it does not fire, because the `ret` *is* syntactically reachable: it is a
+target of the dispatch switch. The defect lives one level down, at which **values** reach that switch.
+Recording this so the next attempt does not spend the same effort:
+
+- The check must be **value-sensitive**: a case target is reachable only if some state value that can
+  actually arrive at the switch selects it. Edge reachability, not instruction reachability.
+- Over-approximating the value set is the safe direction — it over-approximates reachable targets and
+  so under-reports "cannot terminate", which risks missing a defect rather than rejecting a good
+  resolution. Under-approximating would reject correct output, which is the failure this whole
+  section is about.
+- Taking *every* `ldc.i4` in the method as the value set is enough to decide both of these (their
+  in-range constants never include the exit index) but is unsound in general: a machine whose state is
+  computed rather than pushed as a literal would produce an empty value set and be rejected wrongly.
+  Any such shortcut needs a precondition that every value feeding the switch is a constant.
+
+That places the work inside `StateMachineTracer` — enumerating reachable states and marking case
+targets from them — rather than in a bolt-on. Which is also what would let `Undecidable` shrink
+generally, instead of only for this shape.
+
+On the domain: separate singleton-valued configurations are not a weaker analysis than finite sets
+with union at joins. Splitting paths keeps correlations between the stack and locals that a join
+discards, so it can be *more* precise; what it costs is configurations, and it reaches the cap sooner.
+Finite sets are worth adding as state-space compression if the remaining budget exhaustions ever
+matter, not as a precision fix.
+
+### Fixed: the tracer over-approximates instead of walking one path
+
+`StateMachineTracer` explored a single concrete path and gave up at the first condition it could not
+fold — which is any real `brfalse` on a field. That is why methods interleaving dispatch with ordinary
+conditionals landed in `Undecidable`, and why two with a dead exit sat there while every gate passed.
+
+It now explores a bounded set of **configurations** (block + evaluation stack + tracked locals), and
+every imprecision widens the set rather than ending the walk: an unknown branch takes both successors,
+an unknown switch operand takes every target, and a block that will not emulate contributes all
+successors with everything unknown. The reachable set is therefore a superset of what can really
+happen, so **no exit anywhere in it proves no execution exits** — a `Loops` verdict is a proof. The
+cost is the reverse direction, and it is the one to want: imprecision can make a looping method look
+terminating, so the failure available to it is a missed defect, never a rejected good resolution.
+`Undecidable` now means one thing only — a budget ran out, so the set was never completed.
+
+Caps: 4096 configurations, stack depth 16, 16 tracked locals.
+
+**The non-`Loops` verdict is `ExitReachable`, and the name is load-bearing.** It says an exit exists
+somewhere in the widened machine — not that the method terminates. Widening takes every target of an
+unbounded switch and both arms of an untracked branch, so a `ret` found down one of them says nothing
+about the others, and another explored path may cycle forever. Only `Loops` is a proof; `ExitReachable`
+is the *absence* of one. A count of them must never be read as "this many methods terminate", which is
+why the log says `exit-reachable` and anything scraping it inherits that reading. The fixture
+`exit_reachable_not_proven` pins it down: one arm returns, the other provably cycles, and the verdict
+is exit-reachable — correctly refusing to reject a method half of whose executions never return.
+
+Measured, and the second row is the point:
+
+| | before | after |
+|---|---|---|
+| undecidable (S1/S2/S3) | 16 / 14 / 38 | 1 / 1 / 2 |
+| exit-reachable | 0 / 0 / 0 | 15 / 13 / 36 |
+| non-terminating | 0 / 0 / 0 | 0 / 0 / 0 |
+| resolutions rejected | 0 / 0 / 0 | 1 / 0 / 1 |
+
+The two rejections are exactly the two methods, rejected by the **existing** `SelectDispatchCandidate`
+with no new guard added — the architecture was already right, only the verdict was missing. Their
+unresolved forms are kept, so the raw affine machine and its live exit survive. Every gate still
+passes, the landmark check still finds the activation branch, and the export diff is confined to those
+two methods.
+
+Fixtures `dead_exit_constant_states` and `dead_exit_unknown_feeder` are a matched pair differing only
+in the dispatch feeder: constants that never select the exit must be rejected, a feeder from a call
+must not. The second is the one that matters, because an implementation that treated the visible
+`ldc.i4` values as the whole story would pass the first and delete a correct resolution on the second.
+
+### #17: the dropped transition is wrong case attribution, and §5 already named the cause
+
+Instrumenting the rejected per-site plan settles it for S1 without needing anything new — the trace
+already logs attribution, seeds and each derived edge. The exit block is `case 1`'s **direct** target,
+and this is what happens to it:
+
+    attribution: b2  <- case 0 via b4(ldc.i4) -> b2(switch)
+    attribution: b16 <- case 0 via ... -> b2(switch) -> b10(nop) -> b16(ret)
+    attribution: b16 AMBIGUOUS (claimed by case 0, also reached from case 1); this search stops here
+
+Case 0's per-case BFS traverses **through a second dispatch block** (`b2`, a `switch`), claims
+everything downstream of it, and reaches the exit that way. Case 1's legitimate direct claim then
+collides with that, the block is marked ambiguous, the search stops, and no edge selecting the exit is
+ever derived. The rewrite is not dropping a correct edge — it never derives one.
+
+So of the four candidates, it is **wrong case attribution**, and specifically the flaw §5 already
+records: the per-case search traversing through another dispatch means everything downstream of a
+second dispatch gets attributed to whichever case happened to be walked first. §5 calls that map an
+artifact of iteration order; this is what it costs. Not seed provenance (phase 1 derives seeds fine
+for the cases it does resolve), not an omitted plan edge, and not `SwitchRewriter` replacing a correct
+edge later — the edge does not exist by the time the rewriter runs.
+
+The fix therefore belongs in `DispatchDetector`'s attribution, not in `EdgeResolver` or
+`SwitchRewriter`, and §5's warning applies directly: an earlier attempt to change attribution by
+dominance collapsed resolution corpus-wide and was reverted. Read §5 before writing a new rule.
+
+**S3 confirmed: same cause, opposite orientation.** Its exit block is `case 0`'s direct target
+(`[leave.s]`, leaving the protected region), claimed correctly and directly — and then `case 1`'s BFS,
+having traversed through a second dispatch (`b8(switch)`), reaches it too:
+
+    attribution: b1  <- case 0 via b1(leave.s)                     -- direct, correct
+    attribution: b12 <- case 1 via ... -> b8(switch) -> b12(ldc.i4) -- through a second dispatch
+    attribution: b1  AMBIGUOUS (claimed by case 0, also reached from case 1); this search stops here
+
+In S1 the traversing case claimed the exit first and the direct owner collided with it; in S3 the
+direct owner claimed first and the traversing case collided. Same defect, and the difference is only
+which case the iteration reached first — which is precisely §5's point that the map is an artifact of
+iteration order. It also shows the fix cannot be "prefer the direct claim": that would repair S3 and
+leave S1 untouched, because in S1 the direct claim is the one that arrives second. **The traversal is
+what has to stop at a dispatch boundary**; who wins a collision is a symptom.
+
+Two of two, one cause, one place to fix it.
+
+Queued as WORKLOG #16.
+
+> The levers were added for this and are worth keeping: `DE4DOT_NO_XORSWITCH` had been referenced by
+> external tooling for some time but was never actually read, so an A/B against it silently compared
+> two identical runs and would have reported "this pass makes no difference". Everything written down
+> before that was checked for findings resting on it — no roadmap section, skill or commit message
+> ever drew a conclusion from that lever, so nothing needed revalidating.
 
 ---
 

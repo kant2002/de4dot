@@ -23,17 +23,20 @@ pwsh build.ps1
 # Run IL-based inlining tests (Windows: requires pwsh + NETFX ilasm/ildasm on PATH)
 pwsh test.ps1
 
-# Run the XorSwitch dispatch fixtures (portable; restores ilasm from NuGet if needed)
-python3 tests/run_xorswitch_tests.py --fetch-tools
+# Run the .NET Reactor fixtures (portable; restores ilasm from NuGet if needed)
+python3 tests/run_reactor_tests.py --fetch-tools
 ```
 
 `test.ps1` is Windows-only in practice — it hardcodes NETFX tool paths and a `win-x64` de4dot, and
 byte-compares disassembled IL against a checked-in `.cleaned.il`, which fails across ildasm builds
-for reasons unrelated to de4dot. `tests/run_xorswitch_tests.py` is the portable one: it asserts what
-the resolver *decided* (read from its own trace) rather than an exact rendering, so a failure names a
-behaviour rather than saying "the output moved".
+for reasons unrelated to de4dot. `tests/run_reactor_tests.py` is the portable one: it asserts what a
+pass *decided* (read from its own output) rather than an exact rendering, so a failure names a
+behaviour rather than saying "the output moved". It covers the XorSwitch dispatch resolver and the
+module-constant fold, including the latter's refusal path — which the corpus cannot reach, because
+there the premise always holds.
 
-There is no unit test project (xUnit/NUnit/MSTest). The only automated tests are IL-based integration tests in `tests/samples/inlining/` that assemble IL, run de4dot on it, then disassemble the output.
+There is no unit test project (xUnit/NUnit/MSTest). Automated coverage is IL-based integration tests:
+`tests/samples/inlining/` (assembled and byte-compared by `test.ps1`) and `tests/run_reactor_tests.py`.
 
 ## Architecture
 

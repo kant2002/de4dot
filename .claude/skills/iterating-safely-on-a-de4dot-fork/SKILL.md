@@ -8,7 +8,7 @@ description: The meta-workflow and toolchain gotchas for iterating on this de4do
 ## Running the tests
 
 ```bash
-python3 tests/run_xorswitch_tests.py --fetch-tools   # portable, works on Linux
+python3 tests/run_reactor_tests.py --fetch-tools   # portable, works on Linux
 pwsh test.ps1                                        # Windows only
 ```
 

@@ -41,7 +41,7 @@ Run order and each gate's blind spot: ROADMAP §4.
 
 - [x] **5.** Two-variable chained dispatch — **DONE.** Slice 1 (walk the machine) 19 → 5, slice 2
   (specialise the region) 5 → **0**. Export reviewed method-by-method against the original binary;
-  6 IL methods, all faithful, one conditional on the module-constant fold. ROADMAP §7 item 3.
+  6 IL methods, all faithful. ROADMAP §7 item 3.
 
 - [x] **12.** Extraction-worker follow-ups — **DONE.** Field token validated in `ReadRequest` as a
   protocol failure; stderr drained via `BeginErrorReadLine` into a bounded buffer and logged on
@@ -52,8 +52,30 @@ Run order and each gate's blind spot: ROADMAP §4.
   interface method is unavailable while net48 is a target). `TrackedArrayValue` mutability:
   **documented invariant**, no reachable hazard — it cannot outlive one `Initialize`. ROADMAP §9.
 
+- [x] **16.** Dispatch whose exit case no state selects, hidden in *undecidable* — **CONTAINED.**
+  `StateMachineTracer` now over-approximates a configuration set instead of walking one path, so it
+  proves `Loops` where it used to give up; undecidable 16/14/38 → 1/1/2. The existing
+  `SelectDispatchCandidate` rejects both bad candidates with no new guard. The other verdict is
+  `ExitReachable`, not `Terminates` — the absence of a non-termination proof, never a termination
+  proof. ROADMAP §7a.
+
+- [x] **14.** `CflowConstantsInliner` folded constants on an unchecked premise — **DONE.** It now
+  refuses unless the declaring type's `.cctor` calls the initialiser, which is what makes the stores
+  precede every folded read. Corpus unaffected (all three already had that shape); the refusal path
+  is covered by fixtures, since the corpus cannot reach it. ROADMAP §7 item 3.
+
+- [x] **15.** Premise check vetoed selection instead of steering it — **DONE.** `Find()` now applies
+  it per candidate and moves on, so a later qualifying candidate is still folded. The check shrank to
+  one `.cctor` body scan, which is what makes it affordable per candidate. ROADMAP §7 item 3.
+
 ## Open
 
-_Empty._ Every queued item is closed — fixed, or audited and classified with its evidence in
-`ROADMAP.md`. Add new work here rather than reopening a closed item; if a closed finding turns out to
-be wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.
+- [ ] **17.** The per-site resolver still *produces* that bad rewrite; #16 only stops it shipping.
+  **Diagnosed, both methods: wrong case attribution.** The per-case BFS traverses through a second
+  dispatch and reaches an exit block it does not own; the collision marks it ambiguous and aborts the
+  search, so no edge to the exit is derived. Fix the traversal (stop at a dispatch boundary), not the
+  collision rule — the two differ in which case claims first. `DispatchDetector`; ROADMAP §7a, and §5
+  first — a dominance-based rewrite of attribution was already tried and reverted.
+
+Add new work here rather than reopening a closed item; if a closed finding turns out to be
+wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.

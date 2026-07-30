@@ -722,7 +722,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		///     visible at all instead of only downstream in a decompiler.
 		/// </summary>
 		void VerifyStateMachines() {
-			int loops = 0, undecidable = 0, terminates = 0;
+			int loops = 0, undecidable = 0, exitReachable = 0;
 			foreach (var type in module.GetTypes()) {
 				foreach (var method in type.Methods) {
 					if (!method.HasBody || method.Body.Instructions.Count == 0)
@@ -750,8 +750,8 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 							+ "the wrong target, so statements past it are unreachable and absent from the "
 							+ "output", Utils.RemoveNewlines(method), string.Join(" -> ", trace.States));
 						break;
-					case StateMachineVerdict.Terminates:
-						terminates++;
+					case StateMachineVerdict.ExitReachable:
+						exitReachable++;
 						break;
 					default:
 						undecidable++;
@@ -763,11 +763,11 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			// silent on success cannot be told apart from a gate that did not run, and "no warning"
 			// then reads as "zero non-terminating machines" to anything scraping this output.
 			if (loops > 0)
-				Logger.w("State-machine trace: {0} non-terminating, {1} terminating, {2} undecidable",
-					loops, terminates, undecidable);
+				Logger.w("State-machine trace: {0} non-terminating, {1} exit-reachable, {2} undecidable",
+					loops, exitReachable, undecidable);
 			else
-				Logger.n("State-machine trace: 0 non-terminating, {0} terminating, {1} undecidable",
-					terminates, undecidable);
+				Logger.n("State-machine trace: 0 non-terminating, {0} exit-reachable, {1} undecidable",
+					exitReachable, undecidable);
 		}
 
 		// Must run after ProxyCallFixer: the fake-instance stubs only become recognizable once their
