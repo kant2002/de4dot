@@ -1,0 +1,11 @@
+# Never normalise line endings. This repository is deliberately mixed: most sources are LF, but six
+# files are committed with CRLF, and upstream is a Windows project that may add more. Without this,
+# whether those six change depends on each contributor's core.autocrlf setting — so a checkout on one
+# machine produces a diff on another, and a routine edit silently rewrites every line of a file.
+#
+# `-text` means "treat as binary for end-of-line purposes": git stores and checks out exactly the
+# bytes committed, in both directions. Whatever a file already uses, it keeps.
+#
+# If a file's endings ever genuinely need changing, do it as its own commit so the diff is legible
+# rather than hidden inside an unrelated change.
+* -text
