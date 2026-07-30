@@ -593,6 +593,86 @@ Ordered by value. Each step must hold every gate in §4.
    precision. Scope this as a representation change — chained dispatch context, transform blocks
    shared between arms, and stack-carried state inputs — not as an `EdgeResolver` seeding fix.
 
+   ---
+
+   #### Design: relational dispatch modelling (not implemented — review before building)
+
+   **What the machine actually is.** Both worked examples are *two dispatch sites in one
+   mutually-recursive machine*, and the state is carried on the **evaluation stack**: the entry pushes
+   a constant and branches straight to the `switch`, past the `ldloc` that would otherwise load it.
+   The dispatch does `dup; stloc V_n`, so the local is a *copy* the next transform reads — not the
+   carrier. Reduced from `AdvisorTemplate::.ctor`:
+
+   ```
+   entry:  ldc.i4 2 ; br OUTER                                  // pending = 2
+   OUTER:  switch (XFORM, ret, SEED, PAYLOAD, ...)              // consumes pending
+   SEED:   ldc.i4 1714725738                                    // pending = const, falls into INNER
+   INNER:  ldc.i4 K ; xor ; dup ; stloc V_0 ; ldc.i4.3 ; rem.un ; switch
+   XFORM:  ldloc V_0 ; ldc.i4 A ; mul ; ldc.i4 B ; xor ; br INNER   // pending = f(V_0)
+   PAYLOAD: <work> ; ldc.i4 0 ; br OUTER                        // opaque-predicate gated
+   ```
+
+   `pending` alternates between an **outer case index** and an **inner pre-modulus value**. Those are
+   different spaces, and the theory notes' old "two numbering spaces are mixed" confusion was exactly
+   this distinction having nowhere to live.
+
+   **1. State representation.** `MachineState = (Site, Pending, Locals)`, immutable, with structural
+   equality:
+   - `Site` — which dispatch block control is entering. This is the outer-arm context, and it is what
+     makes the two value spaces distinguishable.
+   - `Pending` — the abstract stack that site will consume, `Int32Value[]` of length
+     `site.StackInputs`. `DispatchDetector.ComputeStackInput` already computes that length.
+   - `Locals` — constants for the state locals of *every* site in the group, not one `StateVar`.
+
+   **2. Stack-carried inputs.** `Pending` is carried along the explored edge, so nothing has to be
+   re-derived from block attribution — which is what deletes §5's whole failure mode: no
+   `BlockToCase`, no seed guessing, no `VerifySeedRoutesToCase`. The rewrite side matters just as
+   much: **the producing push must be cut, not only the branch retargeted.** That is Exp 3's ~184
+   stack errors precisely. Under this design it is automatic rather than surgical — emitted code is
+   generated from the explored configuration, so the push is simply never emitted.
+
+   **3. Shared transform blocks.** Rule: **a block is emitted once per distinct `MachineState` it is
+   entered with.** In `CloneSystem` the transform block is entered from two predecessors pushing
+   different constants (`-192729005`, `-295274214`) and begins with `pop`, consuming that constant —
+   so it is two specialisations, not one block with one answer. Collapsing it to a single target is
+   what "partial resolution is reliably destructive" has been describing all along. If a block would
+   need more than *k* specialisations, or a configuration repeats without progress, **fail closed and
+   leave the group untouched**.
+
+   **4. Integration.**
+   - `DispatchNode` is unchanged and keeps the single-site path. A new `DispatchGroup` collects sites
+     that are mutually reachable through each other's case bodies; a one-site group delegates to
+     today's code, so the large majority that already resolves is untouched by construction.
+   - Plan/apply, reusing the existing split: the explorer emits a `SpecializationPlan` (blocks with
+     their instructions, edges, entry redirect) that is validated **whole** before any mutation —
+     per-block stack depth via `StateUpdateFinder.ComputeStackDepths`, every emitted block has a
+     successor or terminates, at least one exit reachable.
+   - The completeness signal is the explorer's own termination — it either enumerated a finite closed
+     configuration set or it bailed. **Never `FailedCount == 0`**, which Exp 2 proved is not a
+     resolution signal.
+   - Gate 5 and branch-and-select stay exactly as they are, as independent post-hoc checks. Prediction
+     worth testing: if this is right, branch-and-select *rejections should fall*, because fewer bad
+     resolutions get built. A rise means the plan validator is wrong, not that the gate is noisy.
+
+   **5. Smallest implementable slice.** Two sites, exploration from the entry configuration reaching a
+   closed set of at most *N*, **no block entered with more than one distinct state**, and every
+   transition either constant or an unknown conditional that forks. That restriction removes block
+   duplication from slice 1 entirely — it is pure relinking plus push removal.
+   `AdvisorTemplate::.ctor` qualifies. Slice 2 adds duplication (`CloneSystem` needs it); slice 3
+   allows more than two sites. Do not start at slice 2.
+
+   **6. Regression tests.** `tests/samples/inlining/` already assembles `<name>.il`, runs de4dot, and
+   diffs against `<name>.cleaned.il` — the right harness, and there is no other. Add shape fixtures
+   distilled from the corpus (shapes only, no sample bytes): a two-site linear machine, a shared
+   transform entered with two states, and a **negative** case whose transition depends on a call and
+   must be left untouched. Corpus acceptance stays the scorecard, with the opaque-predicate dispatch
+   count as the readability delta.
+
+   **7. Abandon criteria, fixed in advance.** Revert if slice 1 raises gate 1, empties any body,
+   raises branch-and-select rejections, or raises the non-terminating count. The current baseline is
+   the floor; a partial improvement bought with any of those is the exact trade the three failed
+   experiments each made.
+
 4. ~~**Opaque-predicate folding with a zero-seeded local.**~~ **ABANDONED — built, measured, reverted.
    Do not retry as specified; the premise is false.** The other Reactor dispatch shape is
    `switch((num = (num*A)^B) % k)` where `num` reads as an un-stored, `.locals init`-zeroed local —

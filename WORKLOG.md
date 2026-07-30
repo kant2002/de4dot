@@ -41,11 +41,12 @@ Run order and each gate's blind spot: ROADMAP §4.
 
 ## Open
 
-- [ ] **5.** Two-variable chained dispatch — deferred, and it is a **representation change**, not a
-  seeding fix: chained dispatch context, shared transform blocks, stack-carried inputs. Needs joint
-  inner+outer resolution, explicit stack rebalancing, and per-method re-verification gating. Three
-  prior attempts all produced invalid IL; **read ROADMAP §7 item 3 and §5 before starting** rather
-  than re-deriving them.
+- [ ] **5.** Two-variable chained dispatch — a **representation change**, not a seeding fix.
+  **Design written and awaiting review; do not implement before that.** ROADMAP §7 item 3 has the
+  state representation, how stack-carried inputs and shared transform blocks are handled, how it sits
+  with `DispatchNode` / plan-apply / gate 5 / branch-and-select, the smallest slice, the fixtures, and
+  the abandon criteria. Three prior attempts all produced invalid IL — §7 item 3 again, and §5 for
+  why no attribution rule can substitute for this.
 - [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
   drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
