@@ -1221,7 +1221,17 @@ where it used to claim `6 edges resolved, 0 failed` for a machine that cannot te
 can now contradict itself, which it could not while a guess counted as a derivation — and that is why
 the defect was previously visible only to an external trace.
 
-It also sizes the problem: **S1 alone applies 61 guessed edges**. That is the measurement to beat, and
+Then the count itself turned out to overstate the problem. "First seed that resolves" is only a guess
+when the candidates **disagree**; if every seed that resolves at all picks the same case, the answer is
+determined and which one was taken does not matter. Separating those two — again classification only,
+output identical — moves **S1 from 61 guessed edges to 16**. Forty-five were never guesses.
+
+That reshapes the remaining work. Declining every unattributed predecessor collapses resolution, as
+measured; declining only the **16 genuinely ambiguous** ones is a different proposition entirely and is
+the next experiment worth running. The prerequisite was being able to tell them apart, which is now
+possible.
+
+It also sizes the problem honestly: **S1 applies 16 edges whose case is not determined by anything**. That is the measurement to beat, and
 it confirms from the other direction why withdrawing the guess is not available. Gates, export and the
 snapshot are untouched, because nothing about the output changed.
 

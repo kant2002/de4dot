@@ -91,8 +91,9 @@ Run order and each gate's blind spot: ROADMAP §4.
   expands through another dispatch — and S3 resolves correctly. S1 still emits a machine that cannot
   terminate: when a predecessor has no owning case the fallback takes the first seed that resolves to
   any in-range case, which is a guess, and the edge to the exit is never derived. Its bookkeeping is
-  now honest — guessed edges count separately, S1 applies **61** of them — so the resolver can report
-  a machine as incompletely derived instead of claiming `0 failed`. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
+  now honest — and sharper than first measured: a seed choice only guesses when candidates disagree, so
+  S1's count is **16**, not 61. Next experiment: decline just those 16, which is a different
+  proposition from the wholesale version that collapsed resolution. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
   the guess is load-bearing corpus-wide, so it has to become *sound*, not go away. #16's containment
   catches the bad candidate meanwhile. ROADMAP §7a, and §5 before writing any seed rule.
 

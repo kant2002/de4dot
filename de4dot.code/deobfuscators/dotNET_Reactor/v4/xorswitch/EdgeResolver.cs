@@ -317,6 +317,35 @@ class EdgeResolver {
 							if (_trace)
 								Trace($"phase3: pred={XorSwitchTrace.Id(pred)} ownedByCase={(hasCaseIdx ? ci.ToString() : "<ambiguous/none>")} trying {allSeeds.Count} seed(s) in enumeration order [{string.Join(", ", allSeeds)}]");
 
+							// With no owning case, "the first seed that resolves" is only a GUESS when the
+							// candidates disagree. If every seed that resolves at all picks the same
+							// case, the answer is determined regardless of which one is taken, and
+							// calling that a guess understates what is actually known.
+							//
+							// This only classifies -- the edge taken is unchanged, so output is
+							// identical. Measuring the split is the prerequisite for declining the
+							// ambiguous ones, which is a far smaller subset than declining every
+							// unattributed predecessor, and that wholesale version is already known
+							// to collapse resolution corpus-wide.
+							bool determined = false;
+							if (!hasCaseIdx) {
+								int agreed = -1;
+								determined = true;
+								foreach (var probe in allSeeds) {
+									var probed = TryResolveEdge(pred, probe);
+									if (probed is null)
+										continue;
+									if (agreed == -1)
+										agreed = probed.Value.CaseIndex;
+									else if (agreed != probed.Value.CaseIndex) {
+										determined = false;
+										break;
+									}
+								}
+								if (agreed == -1)
+									determined = false;
+							}
+
 							foreach (var trySeed in allSeeds) {
 								if (hasCaseIdx && !VerifySeedRoutesToCase(trySeed, ci))
 									continue;
@@ -327,7 +356,7 @@ class EdgeResolver {
 										: "allSeeds, FIRST THAT RESOLVES AT ALL (pred has no owning case)", edge.Value);
 									edges.Add(edge.Value);
 									resolved.Add(pred);
-									if (hasCaseIdx)
+									if (hasCaseIdx || determined)
 										ResolvedCount++;
 									else
 										GuessedCount++;
