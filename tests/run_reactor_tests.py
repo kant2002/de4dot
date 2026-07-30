@@ -54,7 +54,7 @@ class Expectation:
 
     def __init__(self, name, outcome=None, resolved=None, switch_gone=None, calls=None,
                  source=None, log_contains=(), log_lacks=(), body_lacks=(), il_contains=(),
-                 il_lacks=()):
+                 il_lacks=(), blobs=None, files_written=()):
         self.name = name
         self.outcome = outcome            # substring expected in the resolver's outcome line
         self.resolved = resolved          # True: it applied a plan; False: it must not have
@@ -69,6 +69,10 @@ class Expectation:
         self.body_lacks = body_lacks      # opcodes/text that must be gone from Target::Run
         self.il_contains = il_contains    # text that must survive anywhere in the output module
         self.il_lacks = il_lacks          # text that must not
+        # Embedded managed resources. ilasm materialises `.mresource public 'x' { }` by opening a
+        # file literally named x, so the blob has to sit next to the .il under its resource name.
+        self.blobs = blobs                # callable -> {resource name: bytes}
+        self.files_written = files_written  # files de4dot must produce beside its output
 
 
 # ------------------------------------------------------------------ generated cflow-constants IL
@@ -155,6 +159,60 @@ def cflow_constants_il(types, reads, helper_for=None) -> str:
 """
 
 
+
+def costura_host_il() -> str:
+    """A Costura-packed host: one plain assembly, one raw-deflated, one .pdb, one non-PE."""
+    return """.assembly extern mscorlib { .ver 4:0:0:0 }
+.assembly costura_host { }
+.module costura_host.dll
+.mresource public 'costura.plain.dll' { }
+.mresource public 'costura.packed.dll.compressed' { }
+.mresource public 'costura.notes.pdb' { }
+.mresource public 'costura.bogus.dll' { }
+.class public auto ansi abstract sealed beforefieldinit Target
+    extends [mscorlib]System.Object
+{
+  .method public hidebysig static void Run() cil managed { .maxstack 1  ret }
+}
+"""
+
+
+def costura_blobs() -> dict:
+    """
+    The resources the host embeds. The two assemblies are real ones -- a hand-rolled PE header is
+    not enough, because what consumes them further down loads them as assemblies.
+    """
+    import zlib
+    payload = _assemble_payload()
+    deflated = zlib.compressobj(9, zlib.DEFLATED, -15)          # raw deflate, as Costura writes it
+    return {
+        "costura.plain.dll": payload,
+        "costura.packed.dll.compressed": deflated.compress(payload) + deflated.flush(),
+        "costura.notes.pdb": b"not an assembly, and must be skipped rather than written out",
+        "costura.bogus.dll": b"named like an assembly, but has no MZ and must not be claimed",
+    }
+
+
+_payload_cache = {}
+
+
+def _assemble_payload() -> bytes:
+    if "bytes" not in _payload_cache:
+        ilasm = find_ilasm(False)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            (tmp / "p.il").write_text(
+                ".assembly extern mscorlib { .ver 4:0:0:0 }\n.assembly payload { }\n"
+                ".module payload.dll\n"
+                ".class public auto ansi abstract sealed P extends [mscorlib]System.Object\n"
+                "{ .method public hidebysig static void Go() cil managed { .maxstack 1  ret } }\n")
+            flag = "/" if sys.platform == "win32" else "-"
+            subprocess.run([str(ilasm), f"{flag}dll", f"{flag}quiet", str(tmp / "p.il"),
+                            f"{flag}output={tmp / 'payload.dll'}"], capture_output=True, check=True)
+            _payload_cache["bytes"] = (tmp / "payload.dll").read_bytes()
+    return _payload_cache["bytes"]
+
+
 EXPECTATIONS = [
     # The shape slice 1 exists for: two sites, every transition determined, no payload block
     # entered twice. Must collapse to straight-line code calling A then B in that order.
@@ -193,6 +251,17 @@ EXPECTATIONS = [
                 # "1 non-terminating" for a body of otherwise identical shape.
                 log_contains=["State-machine trace: 0 non-terminating"],
                 log_lacks=["Dispatch resolution rejected"]),
+
+    # --- Costura.Fody extraction ---------------------------------------------------------------
+    # Four resources, and only two are assemblies. The two that are must come out byte-identical --
+    # including through raw deflate -- and the .pdb and the non-PE must be declined rather than
+    # written somewhere that can only fail to load them.
+    Expectation("costura_host",
+                source=costura_host_il,
+                blobs=costura_blobs,
+                log_contains=["Costura: extracting 2 embedded"],
+                log_lacks=["notes.pdb", "bogus.dll", "could not write"],
+                files_written=["plain.dll", "packed.dll"]),
 
     # --- CflowConstantsInliner: the premise check -------------------------------------------------
     # The corpus cannot test any of this. There the .cctor always calls the initialiser, so the
@@ -284,6 +353,10 @@ RESOLVED_RE = re.compile(r"XOR-switch relational: resolved (\d+) (?:edge|step)")
 
 def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path) -> list[str]:
     """Returns a list of failure descriptions; empty means the fixture passed."""
+    if exp.blobs is not None:
+        for blob_name, blob in exp.blobs().items():
+            (workdir / blob_name).write_bytes(blob)
+
     if exp.source is not None:
         # Generated: write it into the workspace so --keep leaves the exact IL that was assembled,
         # not a template that has to be re-rendered to be read.
@@ -299,7 +372,7 @@ def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path)
     # Option prefix differs by platform: the Windows build takes /DLL, the Unix build -dll.
     flag = "/" if sys.platform == "win32" else "-"
     asm = subprocess.run([str(ilasm), f"{flag}dll", f"{flag}quiet", str(src),
-                          f"{flag}output={dll}"], capture_output=True, text=True)
+                          f"{flag}output={dll}"], capture_output=True, text=True, cwd=workdir)
     if asm.returncode != 0 or not dll.exists():
         return [f"ilasm failed:\n{asm.stdout[-1500:]}{asm.stderr[-1500:]}"]
 
@@ -325,6 +398,10 @@ def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path)
         failures.append("resolver applied a plan, but this fixture must be refused")
     if exp.outcome and exp.outcome not in outcomes:
         failures.append(f"expected outcome {exp.outcome}, got {outcomes or 'none'}")
+
+    for name in exp.files_written:
+        if not (workdir / name).exists():
+            failures.append(f"expected de4dot to write {name} beside its output")
 
     for text in exp.log_contains:
         if text not in log:

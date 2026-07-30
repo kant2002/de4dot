@@ -17,6 +17,7 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -519,6 +520,11 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			if (genericConstantDecrypter.Detected)
 				genericConstantDecrypter.Initialize(fileData ?? DeobUtils.ReadModule(module));
 
+			// Before anything else touches the module: v3 dumps its embedded assemblies from Begin for
+			// the same reason, and the output path this writes relative to is only guaranteed set up
+			// this early.
+			DumpCosturaAssemblies();
+
 			var cflowInliner = new CflowConstantsInliner(module, DeobfuscatedFile);
 			cflowInliner.InlineAllConstants();
 			AddTypeToBeRemoved(cflowInliner.Type, "Cflow constants type");
@@ -703,17 +709,26 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			Logger.n("Costura: extracting {0} embedded assembly/assemblies", costura.Files.Count);
 			Logger.Instance.Indent();
 			foreach (var file in costura.Files) {
-				Logger.v("Costura: {0}", Utils.RemoveNewlines(file.filename));
-				DeobfuscatedFile.CreateAssemblyFile(file.data,
-					Win32Path.GetFileNameWithoutExtension(file.filename),
-					Win32Path.GetExtension(file.filename));
+				// One bad payload must not take the host down with it. The MZ check upstream is a
+				// sanity test, not a validity proof -- a truncated or mis-detected resource still
+				// reaches here -- and failing to write a dependency is a far smaller loss than
+				// aborting the deobfuscation of the assembly that contained it.
+				try {
+					DeobfuscatedFile.CreateAssemblyFile(file.data,
+						Win32Path.GetFileNameWithoutExtension(file.filename),
+						Win32Path.GetExtension(file.filename));
+					Logger.v("Costura: {0}", Utils.RemoveNewlines(file.filename));
+				}
+				catch (Exception ex) {
+					Logger.w("Costura: could not write {0} ({1}); skipping it and continuing",
+						Utils.RemoveNewlines(file.filename), ex.GetType().Name);
+				}
 			}
 			Logger.Instance.DeIndent();
 		}
 
 		public override void DeobfuscateEnd() {
 			FreePEImage();
-			DumpCosturaAssemblies();
 			RemoveProxyDelegates(proxyCallFixer, false);
 			RemoveInlinedMethods();
 			if (options.RestoreTypes)

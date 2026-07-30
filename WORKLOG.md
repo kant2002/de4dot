@@ -52,6 +52,12 @@ Run order and each gate's blind spot: ROADMAP §4.
   interface method is unavailable while net48 is a target). `TrackedArrayValue` mutability:
   **documented invariant**, no reachable hazard — it cannot outlive one `Initialize`. ROADMAP §9.
 
+- [x] **19.** Costura extraction fixture — **DONE, and it found two defects.** The dumper was wired
+  into `DeobfuscateEnd`, where the output path it writes relative to is not set up, so every
+  extraction threw; and one bad payload aborted the whole run. Moved to `DeobfuscateBegin` (where v3
+  does the same thing) and made per-file failures skip. `costura_host` covers compressed,
+  uncompressed, a skipped `.pdb` and a declined non-PE.
+
 - [x] **16.** Dispatch whose exit case no state selects, hidden in *undecidable* — **CONTAINED.**
   `StateMachineTracer` now over-approximates a configuration set instead of walking one path, so it
   proves `Loops` where it used to give up; undecidable 16/14/38 → 1/1/2. The existing
@@ -92,12 +98,6 @@ Run order and each gate's blind spot: ROADMAP §4.
   `while (true)` fell 52→49. Classify each against the original IL, check the methods
   behind `goto 84→129` for dropped payload, and hold #17's attribution fix (plus the matching export
   and snapshot commits) until then. ROADMAP §7a.
-
-- [ ] **19.** Costura.Fody extraction has **no fixture** — the corpus contains no Costura host, so the
-  new `CosturaDumper` is only verified to be a no-op where it should be one. Its parsing, raw-deflate
-  decompression and PE check are unexercised. Needs an assembled host with `costura.*` resources,
-  covering compressed and uncompressed, a `.pdb` entry that must be skipped, and a non-PE payload that
-  must not be claimed.
 
 Add new work here rather than reopening a closed item; if a closed finding turns out to be
 wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.
