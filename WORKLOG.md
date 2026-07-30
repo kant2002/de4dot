@@ -92,8 +92,10 @@ Run order and each gate's blind spot: ROADMAP §4.
   terminate: when a predecessor has no owning case the fallback takes the first seed that resolves to
   any in-range case, which is a guess, and the edge to the exit is never derived. Its bookkeeping is
   now honest — and sharper than first measured: a seed choice only guesses when candidates disagree, so
-  S1's count is **16**, not 61. Next experiment: decline just those 16, which is a different
-  proposition from the wholesale version that collapsed resolution. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
+  S1's count is **16**, not 61. Declining just those 16 was then **built, measured, reverted** too
+  (`goto` 129→1569, nearly the wholesale cost): resolved edges feed `allSeeds`, so withdrawal cascades.
+  **No withdrawal strategy works** — the fallback must derive or verify, and must keep feeding
+  `allSeeds`. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
   the guess is load-bearing corpus-wide, so it has to become *sound*, not go away. #16's containment
   catches the bad candidate meanwhile. ROADMAP §7a, and §5 before writing any seed rule.
 

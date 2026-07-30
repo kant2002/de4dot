@@ -1226,10 +1226,27 @@ when the candidates **disagree**; if every seed that resolves at all picks the s
 determined and which one was taken does not matter. Separating those two — again classification only,
 output identical — moves **S1 from 61 guessed edges to 16**. Forty-five were never guesses.
 
-That reshapes the remaining work. Declining every unattributed predecessor collapses resolution, as
-measured; declining only the **16 genuinely ambiguous** ones is a different proposition entirely and is
-the next experiment worth running. The prerequisite was being able to tell them apart, which is now
-possible.
+Declining only those 16 was then run, and **it fails too** — nearly as badly as declining all 61:
+
+| | baseline | decline 16 | decline all 61 |
+|---|---|---|---|
+| goto | 129 | 1569 | 1772 |
+| opaque-predicate dispatch sites | 1 | 42 | 226 |
+| undecidable machines | 4 | 19 | 22 |
+
+Withdrawing 16 edges costs almost what withdrawing 61 does, and the reason is the mechanism rather
+than the count: **resolved edges feed `allSeeds`**, so each withdrawal starves the seed set that later
+predecessors are resolved from, and the loss cascades. Phase 3 is not a fallback applied to a fixed
+set of candidates; it is a fixpoint that grows its own inputs.
+
+That closes off the whole family. **No withdrawal strategy works**, however precisely targeted —
+declining is a cascade, not a subtraction. A sound fallback has to *derive* the seed for an
+unattributed predecessor, or verify a candidate edge against something outside the seed set, so that
+the answer is produced rather than removed. Both remaining verdicts on this were reached by measuring,
+and the guessed/determined split is what made the second one cheap to test.
+
+It also gives the shape of a correct fix: whatever replaces the guess must keep contributing to
+`allSeeds`, or it will collapse resolution no matter how sound it is in isolation.
 
 It also sizes the problem honestly: **S1 applies 16 edges whose case is not determined by anything**. That is the measurement to beat, and
 it confirms from the other direction why withdrawing the guess is not available. Gates, export and the
