@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using de4dot.mcp;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -40,7 +41,7 @@ class ObfuscatedFileResource {
 
 		return new() {
 			Contents = [new BlobResourceContents {
-				Blob = Convert.ToBase64String(memoryStream.ToArray()),
+				Blob = Encoding.UTF8.GetBytes(Convert.ToBase64String(memoryStream.ToArray())).AsMemory(),
 				MimeType = "application/octet-stream",
 				Uri = $"de4dot://files/{id}",
 			}]
