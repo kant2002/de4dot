@@ -695,16 +695,47 @@ Ordered by value. Each step must hold every gate in §4.
 
    The reason is a shape the design did not anticipate. A Reactor payload does not occupy one block:
    the opaque predicate splits it, so `call A(); ldc.i4.0; br OUTER` is two blocks joined by a
-   non-dispatch edge. Specialising it therefore needs the whole **chain** copied, and a copy's
-   non-dispatch edges rebuilt — which slice 2 explicitly excluded, refusing with "a specialised block
-   on a non-dispatch edge". That exclusion is what makes it safe and also what makes it useless here:
-   it excludes every real instance.
+   non-dispatch edge. Specialising it therefore needs every block of the payload copied, and the
+   copies' internal edges rebuilt — which slice 2 explicitly excluded, refusing with "a specialised
+   block on a non-dispatch edge". That exclusion is what makes it safe and also what makes it useless
+   here: it excludes every real instance.
 
-   So slice 2 is not "specialise a block", it is **specialise a region** — the maximal single-entry
-   chain between two dispatch traversals — and its cost is rebuilding that region's internal edges,
-   not just one terminator. The `shared_payload` fixture is already the right shape for it (A(),
-   A(), then B(), then exit) and currently asserts the refusal; when specialisation lands, flip that
-   expectation to `resolved=True, calls=["A", "A", "B"]`.
+   **The unit of specialisation is a region, and "chain" is the wrong word for it.** A payload may
+   branch and merge internally — opaque predicates alone guarantee that — so the model is:
+
+   > a **maximal single-entry subgraph** whose exits all lead to a dispatch site, with **no external
+   > entry into any internal block**.
+
+   Single-entry ownership is the whole safety property. A block reachable from outside the region
+   cannot be copied, because the copy would silently steal or duplicate an unrelated path.
+
+   #### What the next attempt must specify
+
+   1. **Region discovery** — from the arrival block, the maximal subgraph whose every internal block
+      has no predecessor outside it, and whose exits are dispatch traversals.
+   2. **Which internal edges are cloned and remapped**, and how a copy's internal targets are
+      rewritten to the copy rather than the original.
+   3. **How exits reconnect** — each exit carries its own configuration, so a region copy has one
+      exit edge per traversal it terminates in.
+   4. **How stack state is preserved across every internal edge**, not just at the boundary. The
+      entry-depth bug in slice 1 was exactly this at one edge; a region has many.
+   5. **Exception-handler boundaries and external branches** — a region may not straddle a handler
+      boundary, and any external branch into it disproves single-entry ownership.
+   6. **Caps**, declared up front and independently: region size, copies per region, emitted blocks,
+      total emitted instructions.
+   7. **Fail-closed when single-entry ownership cannot be proven** — refuse the region, not just the
+      block, and leave the method to the existing path.
+
+   #### Acceptance for the next attempt
+
+   - `shared_payload` resolves to exactly `A()`, `A()`, `B()`.
+   - `CloneSystem` leaves the rejection set **with its activation branch intact** — the branch an
+     earlier experiment deleted, so its presence is the check that this one did not.
+   - The rejection set decreases from five, with **zero** new entries.
+   - Gate 5 stays `0 / 0 / 0`; gates 1, 6 and 7 unchanged.
+   - Unsupported regions are left untouched, verified by `call_dependent` and `two_site_linear`
+     still passing.
+   - Emitted growth stays inside the declared caps.
 
    **Fixtures: done.** `tests/run_xorswitch_tests.py` plus three fixtures under
    `tests/samples/xorswitch/`, 3/3 passing. Portable, because `test.ps1` cannot run outside Windows
