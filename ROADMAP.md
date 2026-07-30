@@ -654,12 +654,42 @@ Ordered by value. Each step must hold every gate in §4.
      worth testing: if this is right, branch-and-select *rejections should fall*, because fewer bad
      resolutions get built. A rise means the plan validator is wrong, not that the gate is noisy.
 
-   **5. Smallest implementable slice.** Two sites, exploration from the entry configuration reaching a
-   closed set of at most *N*, **no block entered with more than one distinct state**, and every
-   transition either constant or an unknown conditional that forks. That restriction removes block
-   duplication from slice 1 entirely — it is pure relinking plus push removal.
-   `AdvisorTemplate::.ctor` qualifies. Slice 2 adds duplication (`CloneSystem` needs it); slice 3
-   allows more than two sites. Do not start at slice 2.
+   **5. Smallest implementable slice — LANDED.** `RelationalDispatchResolver`: two or more sites,
+   walked forward from the method's first instruction with a real emulator, every transition
+   determined, **no payload block entered twice**, and a plan applied only after the walk reaches a
+   real exit. Slice 2 adds specialisation (`CloneSystem` needs it); slice 3 relaxes determinism.
+
+   Measured, diffing the **set** of rejected method identities rather than the count:
+
+   | | before | after |
+   |---|---|---|
+   | branch-and-select rejections | 4 / 4 / 11 (19) | 1 / 2 / 2 (**5**) |
+   | methods newly rejected | — | **0** |
+   | gate 5 non-terminating | 0 / 0 / 0 | 0 / 0 / 0 |
+   | gates 1 / 6 / 7 | pass, 35/35/27 | unchanged |
+   | types / methods / bodies / fields | — | all unchanged |
+   | instructions | 32572 / 32631 / 80257 | 32495 / 32560 / 80007 |
+
+   `AdvisorTemplate::.ctor` — the acceptance case — leaves the rejection set and comes out as 47 bytes
+   of straight-line code whose payload sequence is `Label(...)` → `RemoveManager(2, 0)` → `ret`,
+   matching the sequence decoded by hand from the original binary. Termination alone would not have
+   shown that; a wrongly *shortened* machine also terminates.
+
+   Three defects found while building it, each by instrumenting rather than guessing, and each worth
+   not rediscovering:
+   - the walk stalled on Reactor's opaque predicates until it learned to follow a conditional whose
+     constant the emulator already knows — that is determinism, not a fork;
+   - it treated re-entry into a dispatch *site* as needing specialisation. Sites are re-entered every
+     iteration by construction and carry no state of their own; only **payload** blocks are held to
+     "entered once";
+   - `StateUpdateFinder.ComputeStackDepths` measures from an assumed entry depth of 0, so every
+     stack-carried state block reads as an underflow and its push could never be cut. The walk knows
+     the real entry depth; it now passes it in.
+
+   **Outstanding: the IL fixtures.** `tests/samples/inlining/` is the right harness but needs
+   `ilasm`/`ildasm`, which this environment does not have, so the shape fixtures — two-site linear,
+   shared transform, and the negative case that must be left untouched — are **not yet written**.
+   Corpus acceptance above is what has actually been verified. Write them where the harness can run.
 
    **6. Regression tests.** `tests/samples/inlining/` already assembles `<name>.il`, runs de4dot, and
    diffs against `<name>.cleaned.il` — the right harness, and there is no other. Add shape fixtures

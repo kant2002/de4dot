@@ -48,6 +48,14 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 	public bool Deobfuscate(List<Block> allBlocks) {
 		if (XorSwitchTrace.Wants(_blocks.Method))
 			XorSwitchTrace.BeginMethod(_blocks.Method!);
+
+		// Chained multi-site dispatch first: it is the shape the per-site resolver below cannot do,
+		// and it either resolves the whole machine or changes nothing. Suppressed for the unresolved
+		// candidate exactly like the per-site redirect, so branch-and-select still compares like with
+		// like.
+		if (!SuppressDispatchResolution && RelationalDispatchResolver.TryResolve(_blocks, allBlocks))
+			return true;
+
 		bool modified = false;
 		int totalDispatches = 0;
 		int totalResolved = 0;

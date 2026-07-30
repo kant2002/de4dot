@@ -811,7 +811,12 @@ namespace de4dot.code {
 			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
 
 			numRejectedDispatchResolutions++;
-			Logger.v("Dispatch resolution rejected: the resolved machine never exits, kept the unresolved form");
+			// Normal verbosity, and NAMED, for the same reason the summary below it is: a flat
+			// rejection total can hide one method fixed and another newly broken in the same run, so
+			// the identity is what a before/after comparison has to diff. A name only visible under
+			// -v is a name the acceptance check does not see.
+			Logger.n("Dispatch resolution rejected: {0} -- the resolved machine never exits, kept the unresolved form",
+				Utils.RemoveNewlines(method));
 			return numRemovedLocals;
 		}
 		int numRejectedDispatchResolutions;
