@@ -683,8 +683,37 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			}
 		}
 
+		/// <summary>
+		///     Write out anything Costura.Fody packed into this assembly's resources.
+		/// </summary>
+		/// <remarks>
+		///     Costura hosts are common under every obfuscator, and the dependencies inside one are
+		///     usually protected too, so getting them out is what makes them deobfuscatable at all --
+		///     otherwise they are just opaque resources that never reach a deobfuscator.
+		///
+		///     The resources and the resolver hook are left in place. Removing them would leave the
+		///     host looking for dependencies that are no longer there, and whether it is still meant to
+		///     run is the caller's decision rather than a side effect of extraction.
+		/// </remarks>
+		void DumpCosturaAssemblies() {
+			var costura = new CosturaDumper(module);
+			if (!costura.Detected)
+				return;
+
+			Logger.n("Costura: extracting {0} embedded assembly/assemblies", costura.Files.Count);
+			Logger.Instance.Indent();
+			foreach (var file in costura.Files) {
+				Logger.v("Costura: {0}", Utils.RemoveNewlines(file.filename));
+				DeobfuscatedFile.CreateAssemblyFile(file.data,
+					Win32Path.GetFileNameWithoutExtension(file.filename),
+					Win32Path.GetExtension(file.filename));
+			}
+			Logger.Instance.DeIndent();
+		}
+
 		public override void DeobfuscateEnd() {
 			FreePEImage();
+			DumpCosturaAssemblies();
 			RemoveProxyDelegates(proxyCallFixer, false);
 			RemoveInlinedMethods();
 			if (options.RestoreTypes)

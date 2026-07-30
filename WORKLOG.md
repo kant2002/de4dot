@@ -93,5 +93,11 @@ Run order and each gate's blind spot: ROADMAP §4.
   behind `goto 84→129` for dropped payload, and hold #17's attribution fix (plus the matching export
   and snapshot commits) until then. ROADMAP §7a.
 
+- [ ] **19.** Costura.Fody extraction has **no fixture** — the corpus contains no Costura host, so the
+  new `CosturaDumper` is only verified to be a no-op where it should be one. Its parsing, raw-deflate
+  decompression and PE check are unexercised. Needs an assembled host with `costura.*` resources,
+  covering compressed and uncompressed, a `.pdb` entry that must be skipped, and a non-PE payload that
+  must not be claimed.
+
 Add new work here rather than reopening a closed item; if a closed finding turns out to be
 wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.
