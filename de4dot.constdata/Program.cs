@@ -89,6 +89,15 @@ namespace de4dot.constdata {
 			string path = System.Text.Encoding.UTF8.GetString(ReadExactly(stdin, pathLen));
 
 			int fieldToken = ReadInt32(stdin);
+			// Validated here, with the other request fields, rather than being handed straight to
+			// ResolveField under a catch-all. A structurally impossible token is a PROTOCOL failure,
+			// which fails closed; the parent only ever sends a real FieldDef token, so this fires on a
+			// parent bug and never on target behaviour. The scan fallback for a well-formed token that
+			// does not resolve in the loaded module is deliberately untouched.
+			if ((uint)fieldToken >> 24 != ConstDataProtocol.FieldTableIndex ||
+					(fieldToken & 0x00FFFFFF) == 0)
+				throw new ProtocolException($"field token 0x{fieldToken:X8} is not a FieldDef token");
+
 			int maxResult = ReadInt32(stdin);
 			if (maxResult <= 0 || maxResult > ConstDataProtocol.MaxResultSizeLimit)
 				throw new ProtocolException($"max result {maxResult} out of range");

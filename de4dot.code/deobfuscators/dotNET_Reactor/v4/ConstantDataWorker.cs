@@ -58,6 +58,9 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		/// <summary>Error text is for a log line, not a payload; keep it tiny.</summary>
 		const int MaxErrorSize = 4 * 1024;
 
+		/// <summary>Cap on stderr buffered in the host: a diagnostic, not a transcript.</summary>
+		const int MaxStderrChars = 8 * 1024;
+
 		/// <summary>
 		///     Why the worker did not produce data. This exists so the caller cannot be tricked into
 		///     downgrading: a hostile target that crashes, hangs or confuses the worker would otherwise
@@ -114,6 +117,22 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					return null;                    // still Unavailable: the target has not run
 				outcome = Outcome.ProtocolFailure;  // from here on the target HAS run
 
+				// stderr is redirected, so it MUST be drained: an undrained pipe fills at a few tens
+				// of KB and the worker then blocks forever on write. The timeout would cover that, but
+				// as a timeout -- reporting a stall whose actual cause was a chatty target. Draining
+				// asynchronously also turns what was discarded output into a diagnostic. Bounded,
+				// because a target that floods stderr must not be buffered without limit in the host.
+				var stderrTail = new StringBuilder();
+				process.ErrorDataReceived += (_, e) => {
+					if (e.Data is null)
+						return;
+					lock (stderrTail) {
+						if (stderrTail.Length < MaxStderrChars)
+							stderrTail.Append(e.Data).Append('\n');
+					}
+				};
+				process.BeginErrorReadLine();
+
 				WriteRequest(process.StandardInput.BaseStream, assemblyPath, fieldToken);
 
 				// Read on this thread, but bound the whole exchange by the timeout below: the response is
@@ -136,6 +155,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					Logger.w("Constant-data worker timed out after {0}s; killing it", Timeout.TotalSeconds);
 					KillTree(process);
 					outcome = Outcome.Timeout;
+					LogStderr(stderrTail);
 					return null;
 				}
 
@@ -148,6 +168,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					// failure, not a protocol one; either way the target ran, so neither permits a
 					// fallback.
 					outcome = wellFormed ? Outcome.TargetFailure : Outcome.ProtocolFailure;
+					LogStderr(stderrTail);
 					return null;
 				}
 				outcome = Outcome.Ok;
@@ -310,6 +331,20 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			}
 			catch (Exception) {
 				// already gone, or not killable; the caller falls back regardless
+			}
+		}
+
+		/// <summary>Report what the worker wrote to stderr, if anything, on a failure path.</summary>
+		static void LogStderr(StringBuilder tail) {
+			string text;
+			lock (tail)
+				text = tail.ToString();
+			if (text.Length == 0)
+				return;
+			Logger.v("Constant-data worker stderr:");
+			foreach (var line in text.Split('\n')) {
+				if (line.Length > 0)
+					Logger.v("  {0}", Utils.RemoveNewlines(line));
 			}
 		}
 

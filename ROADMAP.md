@@ -959,10 +959,21 @@ Object with kill-on-close on Windows.
 
 Two follow-ups, neither touching that boundary:
 
-- **Validate the field token before `Module.ResolveField`.** Currently passed straight in under a
-  `try`. Parent-supplied rather than target-supplied, so low risk, but unvalidated.
-- **Drain stderr asynchronously.** It is redirected and never read, so a chatty worker could fill the
-  pipe buffer. The 60s timeout covers the hang, but draining is the correct fix.
+- ~~**Validate the field token before `Module.ResolveField`.**~~ **DONE.** Validated in
+  `ReadRequest`, beside the other request fields, so a structurally impossible token is a *protocol*
+  failure — which fails closed — instead of something handed to `ResolveField` under a catch-all. A
+  field token is `(0x04 << 24) | rid` with a non-zero rid; the parent only ever sends a real dnlib
+  `FieldDef` token, so this fires on a parent bug and never on target behaviour. The scan fallback
+  for a **well-formed** token that does not resolve in the loaded module is deliberately untouched.
+- ~~**Drain stderr asynchronously.**~~ **DONE.** stderr was redirected and never read, so an
+  undrained pipe fills at a few tens of KB and the worker blocks forever on write — the 60s timeout
+  covered that, but reported a stall whose actual cause was a chatty target. Now drained via
+  `BeginErrorReadLine` into an 8 KB bounded buffer (a diagnostic, not a transcript) and logged on the
+  timeout and failure paths, turning discarded output into evidence.
+
+Neither touches the fail-closed boundary: no `Outcome` assignment was added, removed or changed.
+Verified by the canonical scorecard — every gate byte-identical to the pre-change baseline, with
+gate 7 at 35 / 35 / 27 confirming the worker path still runs.
 
 ---
 

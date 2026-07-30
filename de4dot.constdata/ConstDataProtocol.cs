@@ -51,5 +51,11 @@ namespace de4dot.constdata {
 
 		/// <summary>Longest path the worker will accept, to bound the first allocation it makes.</summary>
 		public const int MaxPathBytes = 32 * 1024;
+
+		/// <summary>
+		///     Metadata table index of a FieldDef. A field token is <c>(0x04 &lt;&lt; 24) | rid</c>,
+		///     so the high byte identifies the table and the low 24 bits the row.
+		/// </summary>
+		public const int FieldTableIndex = 0x04;
 	}
 }

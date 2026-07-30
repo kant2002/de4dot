@@ -43,9 +43,11 @@ Run order and each gate's blind spot: ROADMAP §4.
   (specialise the region) 5 → **0**. Export reviewed method-by-method against the original binary;
   6 IL methods, all faithful, one conditional on the module-constant fold. ROADMAP §7 item 3.
 
+- [x] **12.** Extraction-worker follow-ups — **DONE.** Field token validated in `ReadRequest` as a
+  protocol failure; stderr drained via `BeginErrorReadLine` into a bounded buffer and logged on
+  failure. Fail-closed boundary untouched; gates byte-identical. ROADMAP §8.
+
 ## Open
 
-- [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
-  drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
   breaking change for out-of-tree plugins; `TrackedArrayValue` is a mutable `Value`. ROADMAP §9.
