@@ -570,7 +570,9 @@ Ordered by value. Each step must hold every gate in §4.
    them (§5) is contained, not fixed — resolving them properly is now a readability item ranking with
    3–5 below, and any attempt has to pass gate 5 to land.
 
-3. **Two-variable chained dispatch.** Some methods nest an **outer plain-int `switch(state)`** around
+3. ~~**Two-variable chained dispatch.**~~ **DONE — resolved, and the export reviewed method by method
+   against the original binary.** Branch-and-select rejections **19 → 0**; every changed decompiled
+   method carries a recorded verdict. Some methods nest an **outer plain-int `switch(state)`** around
    the **inner affine xor-switch**; de4dot only recognises the inner layer. 8 sites in the corpus,
    currently left fully unresolved and therefore *correct*. A **readability** item, not a correctness
    one — which is why it ranks below the above despite being the oldest open task.
@@ -748,6 +750,25 @@ Ordered by value. Each step must hold every gate in §4.
    - **stack preservation across every internal edge**, not only at the region boundary;
    - **rejection-set identity** — the set, never the count;
    - **`CloneSystem`'s activation branch** — present by name, not inferred from a count.
+
+   #### Outcome
+
+   Landed in two slices. **Slice 1** (`RelationalDispatchResolver`) walks the machine forward
+   carrying the configuration on the edge — no seed, no case attribution — and took rejections
+   19 → 5. **Slice 2** specialises a region reached in more than one configuration, taking them
+   5 → **0**. Every gate held throughout and no method ever entered the rejection set.
+
+   The apply phase needed one correction worth remembering: whole-plan validation is not enough if
+   materialisation *reads* blocks that earlier apply steps are already mutating. Copies must be taken
+   from the pristine blocks before any rewrite — applying a validated plan has to be atomic with
+   respect to its own inputs too.
+
+   **The export was then reviewed method by method against the original binary**, not against the
+   previous export. Nine changed decompiled methods reduce to six IL methods (a decompiler inlines a
+   lambda body into every call site, so one changed method can appear as several); five are faithful
+   outright and one is faithful conditional on the module-constant fold, with its alternative trace
+   recorded. Downstream tooling grew a changed-method deriver and a read-only original-machine trace
+   generator to make that review reproducible rather than a one-off reading.
 
    #### Acceptance for the next attempt
 
