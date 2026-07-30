@@ -29,16 +29,25 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4.xorswitch;
 ///     Deobfuscates XOR-switch state machines produced by .NET Reactor v6.x.
 ///     Unified CFG-driven approach using abstract interpretation instead of pattern matching.
 /// </summary>
-class XorSwitchDeobfuscator : IBlocksDeobfuscator {
+class XorSwitchDeobfuscator : IBlocksDeobfuscator, ISwitchDispatchResolver {
 	Blocks _blocks;
 
 	public bool ExecuteIfNotModified => false;
+
+	/// <summary>
+	///     Detect, fold and resolve exactly as usual, but do not rewire anything. The unresolved
+	///     sibling candidate then differs from the resolved one by the redirect alone, which is the
+	///     decision the state-machine trace is being asked to judge.
+	/// </summary>
+	public bool SuppressDispatchResolution { get; set; }
 
 	public void DeobfuscateBegin(Blocks blocks) => this._blocks = blocks;
 
 
 
 	public bool Deobfuscate(List<Block> allBlocks) {
+		if (XorSwitchTrace.Wants(_blocks.Method))
+			XorSwitchTrace.BeginMethod(_blocks.Method!);
 		bool modified = false;
 		int totalDispatches = 0;
 		int totalResolved = 0;
@@ -78,7 +87,7 @@ class XorSwitchDeobfuscator : IBlocksDeobfuscator {
 			totalResolved += resolver.ResolvedCount;
 			totalFailed += resolver.FailedCount;
 
-			if (edges.Count == 0)
+			if (edges.Count == 0 || SuppressDispatchResolution)
 				continue;
 
 			// Apply resolved edges

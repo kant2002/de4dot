@@ -636,6 +636,13 @@ namespace de4dot.code {
 				if (isVerbose)
 					Logger.Instance.DeIndent();
 			}
+
+			// Normal verbosity, not verbose: this is how many methods were deliberately left
+			// unresolved, and a number nobody can see is a number nobody can audit against the
+			// state-machine trace it is supposed to explain.
+			if (numRejectedDispatchResolutions > 0)
+				Logger.n("Dispatch selection: kept the unresolved form of {0} method(s) whose resolved "
+					+ "state machine never terminates", numRejectedDispatchResolutions);
 		}
 
 		static bool CanLoadMethodBody(MethodDef method) {
@@ -685,6 +692,43 @@ namespace de4dot.code {
 			int oldNumInstructions = method.Body.Instructions.Count;
 
 			deob.DeobfuscateMethodBegin(blocks);
+
+			IList<Instruction> allInstructions;
+			IList<ExceptionHandler> allExceptionHandlers;
+			if (NeedsDispatchSelection(method))
+				numRemovedLocals = SelectDispatchCandidate(method, blocks, cflowDeobfuscator,
+					out allInstructions, out allExceptionHandlers);
+			else {
+				numRemovedLocals = RunBodyLocalPasses(blocks, cflowDeobfuscator);
+				blocks.GetCode(out allInstructions, out allExceptionHandlers);
+				DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
+			}
+
+			if (isVerbose && numRemovedLocals > 0)
+				Logger.v("Removed {0} unused local(s)", numRemovedLocals);
+			int numRemovedInstructions = oldNumInstructions - method.Body.Instructions.Count;
+			if (isVerbose && numRemovedInstructions > 0)
+				Logger.v("Removed {0} dead instruction(s)", numRemovedInstructions);
+
+			if (isVV) {
+				Logger.Log(LoggerEvent.VeryVerbose, "Deobfuscated code:");
+				Logger.Instance.Indent();
+				methodPrinter.Print(LoggerEvent.VeryVerbose, allInstructions, allExceptionHandlers);
+				Logger.Instance.DeIndent();
+			}
+		}
+
+		/// <summary>
+		///     Every body-local pass that follows <c>DeobfuscateMethodBegin</c>, in order. Returns the
+		///     number of locals <c>OptimizeLocals</c> pruned.
+		///
+		///     Separated out because it is run more than once for some methods, over the same input —
+		///     see <see cref="SelectDispatchCandidate"/>. Nothing in here may commit a module-level side
+		///     effect that a second run would double, or that would outlive a candidate that is thrown
+		///     away.
+		/// </summary>
+		int RunBodyLocalPasses(Blocks blocks, BlocksCflowDeobfuscator cflowDeobfuscator) {
+			int numRemovedLocals = 0;
 			if (options.ControlFlowDeobfuscation) {
 				cflowDeobfuscator.Initialize(blocks);
 				cflowDeobfuscator.Deobfuscate();
@@ -701,21 +745,89 @@ namespace de4dot.code {
 
 			DeobfuscateStrings(blocks);
 			deob.DeobfuscateMethodEnd(blocks);
+			return numRemovedLocals;
+		}
 
-			blocks.GetCode(out var allInstructions, out var allExceptionHandlers);
+		/// <summary>
+		///     Only a method that dispatches on a switch can be mis-resolved the way selection guards
+		///     against, and building a second candidate costs a second run of every body-local pass — so
+		///     everything else takes the single-candidate path, unchanged.
+		///
+		///     Reading the body as it stands before control flow deobfuscation is sound: no pass in the
+		///     candidate region introduces a <c>switch</c>, they only resolve or delete them.
+		/// </summary>
+		bool NeedsDispatchSelection(MethodDef method) {
+			if (!options.ControlFlowDeobfuscation)
+				return false;
+			foreach (var instr in method.Body.Instructions) {
+				if (instr.OpCode.Code == Code.Switch)
+					return true;
+			}
+			return false;
+		}
+
+		/// <summary>
+		///     Produce the method both ways and keep the one whose state machine actually runs.
+		///
+		///     Candidate A resolves switch dispatch, candidate B does not; they are otherwise the
+		///     identical pipeline over the identical normalized input, so whichever is selected is
+		///     consistent with proxy fixing, string decryption, locals and exception handlers. A dispatch
+		///     resolved to the wrong target produces IL that is type-safe, stack-balanced and not empty,
+		///     and still loops forever — nothing short of tracing the finished method sees it, which is
+		///     why the decision is made here rather than at the rewrite site, where three local
+		///     heuristics have already failed.
+		///
+		///     Selection happens per method, before any module-wide liveness or helper-removal decision.
+		///     That ordering is the point: an earlier attempt rolled a body back *after* those decisions
+		///     had been made, which resurrected calls to proxy methods already committed for deletion and
+		///     left tokens no decompiler could resolve.
+		/// </summary>
+		int SelectDispatchCandidate(MethodDef method, Blocks normalized, BlocksCflowDeobfuscator cflowDeobfuscator,
+				out IList<Instruction> allInstructions, out IList<ExceptionHandler> allExceptionHandlers) {
+			// Commit normalization to the body first, so the snapshot is of the proxy-fixed input both
+			// candidates start from. Snapshotting before this point would capture the body as it was
+			// BEFORE DeobfuscateMethodBegin, and restoring that is what brings deleted proxies back.
+			normalized.GetCode(out var normalizedInstructions, out var normalizedHandlers);
+			DotNetUtils.RestoreBody(method, normalizedInstructions, normalizedHandlers);
+			var input = MethodBodySnapshot.Capture(method);
+
+			var resolved = new Blocks(method);
+			int numRemovedLocals = RunBodyLocalPasses(resolved, cflowDeobfuscator);
+			resolved.GetCode(out allInstructions, out allExceptionHandlers);
+			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
+			if (!NeverTerminates(method))
+				return numRemovedLocals;
+
+			input.Restore(method);
+			var unresolved = new Blocks(method);
+			cflowDeobfuscator.SuppressDispatchResolution = true;
+			try {
+				numRemovedLocals = RunBodyLocalPasses(unresolved, cflowDeobfuscator);
+			}
+			finally {
+				cflowDeobfuscator.SuppressDispatchResolution = false;
+			}
+			unresolved.GetCode(out allInstructions, out allExceptionHandlers);
 			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
 
-			if (isVerbose && numRemovedLocals > 0)
-				Logger.v("Removed {0} unused local(s)", numRemovedLocals);
-			int numRemovedInstructions = oldNumInstructions - method.Body.Instructions.Count;
-			if (isVerbose && numRemovedInstructions > 0)
-				Logger.v("Removed {0} dead instruction(s)", numRemovedInstructions);
+			numRejectedDispatchResolutions++;
+			Logger.v("Dispatch resolution rejected: the resolved machine never exits, kept the unresolved form");
+			return numRemovedLocals;
+		}
+		int numRejectedDispatchResolutions;
 
-			if (isVV) {
-				Logger.Log(LoggerEvent.VeryVerbose, "Deobfuscated code:");
-				Logger.Instance.Indent();
-				methodPrinter.Print(LoggerEvent.VeryVerbose, allInstructions, allExceptionHandlers);
-				Logger.Instance.DeIndent();
+		/// <summary>
+		///     Trace the completed candidate exactly the way the end-of-run gate does.
+		///
+		///     Only a <c>Loops</c> verdict rejects. <c>Undecidable</c> means the trace could not judge the
+		///     method, and rejecting on that would discard good resolutions on no evidence.
+		/// </summary>
+		static bool NeverTerminates(MethodDef method) {
+			try {
+				return StateMachineTracer.Trace(new Blocks(method), method).Verdict == StateMachineVerdict.Loops;
+			}
+			catch {
+				return false;	// a diagnostic must never decide the pipeline by throwing
 			}
 		}
 

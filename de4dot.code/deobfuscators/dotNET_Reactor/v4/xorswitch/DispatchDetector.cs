@@ -58,7 +58,7 @@ static class DispatchDetector {
 		if (!ValidateDispatch(switchBlock, headerBlock, stateVar, blocks))
 			return null;
 
-		var blockToCase = BuildBlockToCase(switchBlock, headerBlock);
+		var blockToCase = BuildBlockToCase(switchBlock, headerBlock, XorSwitchTrace.Wants(blocks.Method));
 
 		// Heuristic gate: require that at least some predecessors are case targets,
 		// indicating a state machine (cycle exists) rather than a legitimate switch
@@ -268,7 +268,7 @@ static class DispatchDetector {
 	///     BFS from each case target, mapping reachable blocks to their case index.
 	///     Blocks reachable from multiple case indices are excluded (ambiguous).
 	/// </summary>
-	static Dictionary<Block, int> BuildBlockToCase(Block switchBlock, Block headerBlock) {
+	static Dictionary<Block, int> BuildBlockToCase(Block switchBlock, Block headerBlock, bool trace) {
 		var result = new Dictionary<Block, int>();
 		var ambiguous = new HashSet<Block>();
 		var targets = switchBlock.Targets;
@@ -276,6 +276,7 @@ static class DispatchDetector {
 		for (int caseIdx = 0; caseIdx < targets.Count; caseIdx++) {
 			var queue = new Queue<Block>();
 			var visited = new HashSet<Block>();
+			var parent = new Dictionary<Block, Block>();
 			queue.Enqueue(targets[caseIdx]);
 			visited.Add(targets[caseIdx]);
 			int count = 0;
@@ -292,6 +293,8 @@ static class DispatchDetector {
 
 				if (result.TryGetValue(block, out int existingCase)) {
 					if (existingCase != caseIdx) {
+						if (trace)
+							XorSwitchTrace.Log($"  attribution: {XorSwitchTrace.Id(block)} AMBIGUOUS (claimed by case {existingCase}, also reached from case {caseIdx}); this search stops here");
 						result.Remove(block);
 						ambiguous.Add(block);
 					}
@@ -299,15 +302,33 @@ static class DispatchDetector {
 				}
 
 				result[block] = caseIdx;
+				if (trace)
+					XorSwitchTrace.Log($"  attribution: {XorSwitchTrace.Id(block)} <- case {caseIdx} via {DescribeRoute(block, parent, targets[caseIdx])}");
 
 				foreach (var succ in block.GetTargets()) {
-					if (visited.Add(succ))
+					if (visited.Add(succ)) {
+						parent[succ] = block;
 						queue.Enqueue(succ);
+					}
 				}
 			}
 		}
 
 		return result;
+	}
+
+	/// <summary>Renders the BFS route that attributed a block to a case, oldest-first.</summary>
+	static string DescribeRoute(Block block, Dictionary<Block, Block> parent, Block root) {
+		var steps = new List<string>();
+		var current = block;
+		while (current is not null && steps.Count < 12) {
+			steps.Add($"{XorSwitchTrace.Id(current)}({current.LastInstr.OpCode.Name})");
+			if (current == root)
+				break;
+			parent.TryGetValue(current, out current);
+		}
+		steps.Reverse();
+		return string.Join(" -> ", steps);
 	}
 
 	/// <summary>

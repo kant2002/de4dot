@@ -378,8 +378,18 @@ namespace de4dot.blocks {
 				return;
 			}
 
-			var oldInstrs = method.Body.Instructions;
-			var oldExHandlers = method.Body.ExceptionHandlers;
+			CopyBody(method.Body.Instructions, method.Body.ExceptionHandlers, out instructions, out exceptionHandlers);
+		}
+
+		/// <summary>
+		///     Clone an instruction list and its handlers, remapping every branch target, switch target
+		///     array and handler boundary (<c>FilterStart</c> included) into the clone.
+		///
+		///     Takes the lists rather than a method so a detached copy can itself be cloned — see
+		///     <see cref="MethodBodySnapshot"/>, which must hand out a fresh copy on every restore.
+		/// </summary>
+		public static void CopyBody(IList<Instruction> oldInstrs, IList<ExceptionHandler> oldExHandlers,
+				out IList<Instruction> instructions, out IList<ExceptionHandler> exceptionHandlers) {
 			instructions = new List<Instruction>(oldInstrs.Count);
 			exceptionHandlers = new List<ExceptionHandler>(oldExHandlers.Count);
 			var oldToIndex = Utils.CreateObjectToIndexDictionary(oldInstrs);

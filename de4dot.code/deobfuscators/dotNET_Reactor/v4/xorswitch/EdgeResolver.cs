@@ -55,10 +55,41 @@ class EdgeResolver {
 
 	public int FailedCount { get; private set; }
 
+	readonly bool _trace;
+
 	public EdgeResolver(DispatchNode dispatch, Blocks blocks) {
 		_dispatch = dispatch;
 		_blocks = blocks;
 		_method = blocks.Method;
+		_trace = XorSwitchTrace.Wants(blocks.Method);
+	}
+
+	void Trace(string message) {
+		if (_trace)
+			XorSwitchTrace.Log(message);
+	}
+
+	void TraceDispatch() {
+		if (!_trace)
+			return;
+		Trace($"dispatch switch={XorSwitchTrace.Id(_dispatch.SwitchBlock)} [{XorSwitchTrace.Sketch(_dispatch.SwitchBlock)}]");
+		Trace($"  header={(_dispatch.HeaderBlock is null ? "<none>" : XorSwitchTrace.Id(_dispatch.HeaderBlock))} stateVar={(_dispatch.StateVar is null ? "<none>" : "V_" + _dispatch.StateVar.Index)}");
+		for (int i = 0; i < _dispatch.CaseTargets.Count; i++)
+			Trace($"  case {i} -> {XorSwitchTrace.Id(_dispatch.CaseTargets[i])} [{XorSwitchTrace.Sketch(_dispatch.CaseTargets[i])}]");
+		foreach (var pred in GetDispatchPredecessors()) {
+			bool owned = _dispatch.BlockToCase.TryGetValue(pred, out int ci);
+			Trace($"  pred {XorSwitchTrace.Id(pred)} ownedByCase={(owned ? ci.ToString() : "<ambiguous/none>")} [{XorSwitchTrace.Sketch(pred)}]");
+			foreach (var src in pred.Sources)
+				Trace($"    <- src {XorSwitchTrace.Id(src)} last={src.LastInstr.OpCode.Name} [{XorSwitchTrace.Sketch(src)}]");
+		}
+	}
+
+	void TraceEdge(string phase, Block pred, int? seed, string seedFrom, ResolvedEdge edge) {
+		if (!_trace)
+			return;
+		var seedText = seed.HasValue ? seed.Value.ToString() : "<none>";
+		var incoming = edge.TargetIncomingStateVar.HasValue ? edge.TargetIncomingStateVar.Value.ToString() : "<unknown>";
+		Trace($"{phase}: pred={XorSwitchTrace.Id(pred)} seed={seedText} (from {seedFrom}) -> case={edge.CaseIndex} targetIncomingState={incoming}");
 	}
 
 	/// <summary>
@@ -149,6 +180,8 @@ class EdgeResolver {
 		var edges = new List<ResolvedEdge>();
 		var resolved = new HashSet<Block>();
 
+		TraceDispatch();
+
 		// Phase 1: Direct resolution (unseeded)
 		int maxIterations = _dispatch.CaseTargets.Count * 4;
 		for (int iter = 0; iter < maxIterations; iter++) {
@@ -164,7 +197,8 @@ class EdgeResolver {
 				if (IsUnconditionalPredecessor(pred)) {
 					var edge = TryResolveEdge(pred);
 					if (edge is null) continue;
-					
+
+					TraceEdge("phase1", pred, null, "unseeded", edge.Value);
 					edges.Add(edge.Value);
 					resolved.Add(pred);
 					ResolvedCount++;
@@ -227,6 +261,7 @@ class EdgeResolver {
 
 							var edge = TryResolveEdge(pred, seed);
 							if (edge is not null) {
+								TraceEdge("phase2", pred, seed, $"caseStateVar[{predCaseIdx}] (pred owned by case {predCaseIdx})", edge.Value);
 								edges.Add(edge.Value);
 								resolved.Add(pred);
 								ResolvedCount++;
@@ -263,11 +298,17 @@ class EdgeResolver {
 							if (hasCaseIdx && caseStateVar.ContainsKey(ci))
 								continue;
 
+							if (_trace)
+								Trace($"phase3: pred={XorSwitchTrace.Id(pred)} ownedByCase={(hasCaseIdx ? ci.ToString() : "<ambiguous/none>")} trying {allSeeds.Count} seed(s) in enumeration order [{string.Join(", ", allSeeds)}]");
+
 							foreach (var trySeed in allSeeds) {
 								if (hasCaseIdx && !VerifySeedRoutesToCase(trySeed, ci))
 									continue;
 								var edge = TryResolveEdge(pred, trySeed);
 								if (edge is not null) {
+									TraceEdge("phase3", pred, trySeed, hasCaseIdx
+										? $"allSeeds, first that routes to owning case {ci}"
+										: "allSeeds, FIRST THAT RESOLVES AT ALL (pred has no owning case)", edge.Value);
 									edges.Add(edge.Value);
 									resolved.Add(pred);
 									ResolvedCount++;
@@ -371,6 +412,8 @@ class EdgeResolver {
 
 						var edge = TryResolveEdge(pred, derivedSeed.Value, seedIsAtPredecessorEntry: true);
 						if (edge is not null) {
+							TraceEdge("phase6", pred, derivedSeed.Value,
+								$"TraceStateVarForward(case {predCaseIdx} target -> pred, caseSeed {caseSeed})", edge.Value);
 							edges.Add(edge.Value);
 							resolved.Add(pred);
 							ResolvedCount++;
@@ -1139,6 +1182,7 @@ class EdgeResolver {
 			if (caseStateVar.TryGetValue(nextCase, out int _))
 				continue;
 
+			Trace($"phase5: caseStateVar[{nextCase}] = {nextSeed} (algebraic/emulated extraction)");
 			caseStateVar[nextCase] = nextSeed;
 			allSeeds.Add(nextSeed);
 			newSeedCount++;

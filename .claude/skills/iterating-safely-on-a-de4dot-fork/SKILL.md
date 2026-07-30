@@ -1,6 +1,6 @@
 ---
 name: iterating-safely-on-a-de4dot-fork
-description: The meta-workflow and toolchain gotchas for iterating on this de4dot fork — build commands, the living WORKLOG.md/IMPROVEMENT_PLAN.md convention, de4dot's single-file CLI invocation syntax, ilspycmd's runtime mismatch, and how to A/B test a change when git push-adjacent commands are blocked in this environment. Use at the start of any multi-step improvement effort and whenever running de4dot or ilspycmd from the command line.
+description: The meta-workflow and toolchain gotchas for iterating on this de4dot fork — build commands, the ROADMAP.md/WORKLOG.md convention, de4dot's single-file CLI invocation syntax, ilspycmd's runtime mismatch, and how to A/B test a change when git push-adjacent commands are blocked in this environment. Use at the start of any multi-step improvement effort and whenever running de4dot or ilspycmd from the command line.
 ---
 
 # Iterating Safely on a de4dot Fork
@@ -14,17 +14,18 @@ description: The meta-workflow and toolchain gotchas for iterating on this de4do
 
 ## Build commands
 
-Two solution files, one per target framework:
-
-```bash
-dotnet build -c Release de4dot.netcore.sln                      # .NET 8, primary dev target
-dotnet build -c Release -f net48 de4dot.netframework.sln         # .NET Framework 4.8
-pwsh build.ps1                                                    # full release build, both targets
-pwsh test.ps1                                                     # IL-based inlining tests (needs ilasm/ildasm)
-```
+**Canonical list is in `CLAUDE.md` → "Build Commands"; read it there rather than trusting a copy.**
+The short version: solution *filters* per target framework (`de4dot.slnx` is the full solution),
+`de4dot.net.slnf` for the primary .NET target, `de4dot.netframework.slnf` with `-f net48` for .NET
+Framework, `build.ps1` for both, `test.ps1` for the IL inlining tests.
 
 There is no xUnit/NUnit/MSTest project — the only automated tests are the IL-based integration tests
 under `tests/samples/inlining/` (assemble IL → run de4dot → disassemble → compare).
+
+> This section used to carry its own copy of the commands and named `de4dot.netcore.sln`, a file that
+> does not exist, at ".NET 8, primary dev target" when the projects had already moved to net10.0. That
+> is the drift this skill's one-place rule exists to prevent — and it is why the commands now live in
+> one file only.
 
 ## Running de4dot from the command line
 
@@ -50,25 +51,36 @@ you force a runtime roll-forward:
 DOTNET_ROLL_FORWARD=LatestMajor ilspycmd -p -o <out-dir> <deobfuscated.dll>
 ```
 
-## The living-document convention: WORKLOG.md + IMPROVEMENT_PLAN.md
+## The living-document convention: ROADMAP.md is the record, WORKLOG.md is the queue
 
-This fork tracks its improvement effort in two root-level files, not just commit messages:
+This fork tracks its improvement effort in two root-level files, not just commit messages, and the
+split between them is strict:
 
-- **`IMPROVEMENT_PLAN.md`** — the full findings/methodology/experiment history. Includes completed
-  fixes with their root-cause explanation, a regression audit, failed-experiment writeups (so a
-  failed approach isn't silently retried), open code-review findings, and a priority-ordered open
-  work list.
-- **`WORKLOG.md`** — a terser one-by-one task queue referencing the plan, with a running correctness
-  baseline restated at the top so it's never more than a scroll away.
+- **`ROADMAP.md`** — the **only** narrative document. Measured state, the correctness metric, every
+  root cause found, the gate hierarchy and each gate's blind spot, failed-experiment writeups (so a
+  failed approach isn't silently retried), and the priority-ordered path to done.
+- **`WORKLOG.md`** — a bare checkbox queue. One line per task: status plus a pointer to the ROADMAP
+  section. It deliberately carries no explanation of its own.
 
-**Before starting any nontrivial change, read both.** They exist specifically so that a failed
-approach (see the `debugging-xorswitch-control-flow-recovery` skill for three such failures) doesn't get
-re-attempted from scratch, and so the current correctness baseline
-(the `measuring-deobfuscation-correctness-with-ilverify` skill) is always known rather than re-derived.
-**After landing any nontrivial change, update both** — mark the worklog item done, and add the
-finding (root cause, what was tried, what fixed it, what didn't) to the plan in the same style as
-existing entries. An undocumented fix is much less valuable than a documented one here, because the
-next session's first move is reading these files, not `git log`.
+**Before starting any nontrivial change, read `ROADMAP.md`.** It exists so that a failed approach
+(see the `debugging-xorswitch-control-flow-recovery` skill for several) isn't re-attempted from
+scratch, and so the current correctness baseline is known rather than re-derived.
+
+**After landing any nontrivial change: add the finding to `ROADMAP.md`, tick the box in
+`WORKLOG.md`.** An undocumented fix is much less valuable than a documented one here, because the next
+session's first move is reading these files, not `git log`.
+
+**Write the finding in exactly one place.** These two files replaced three that each restated the
+metric, the baseline correction and the same root causes; the copies drifted until they contradicted
+each other, and there was no way to tell which was right without re-measuring. If a fact belongs in
+ROADMAP, link to its section from anywhere else that needs it — including from these skills. Adding
+"just a short summary" in a second file is how that mess regrows.
+
+**This repo must read as fully self-contained — see `CLAUDE.md` → "Documentation rules".** Do not
+name or allude to any other repository, organisation or body of work that supplies test material, not
+even indirectly. The corpus is `S1`/`S2`/`S3`; external tooling is described by what it measures, never
+named; illustrative identifiers are de4dot-generated or invented, never lifted from a target assembly
+in a way that would identify it.
 
 ## A/B testing a change when git push-adjacent commands are blocked
 
@@ -91,14 +103,14 @@ guard rather than something to debug in `.git/hooks/`.
 
 ## Common scenarios
 
-**Scenario: starting work on an item from `WORKLOG.md`'s open queue.** Read the relevant section of
-`IMPROVEMENT_PLAN.md` in full first — the open items are ordered by priority for a reason, and the
-plan document usually already contains a specific "next step" recommendation (e.g. "instrument X
-before guessing the responsible pass") that saves significant rediscovery time.
+**Scenario: starting work on an item from `WORKLOG.md`'s open queue.** Follow its pointer and read
+that `ROADMAP.md` section in full first — the open items are ordered by priority for a reason, and the
+roadmap usually already contains a specific "next step" recommendation (e.g. "instrument X before
+guessing the responsible pass") that saves significant rediscovery time.
 
 **Scenario: a fix looks done and tests pass.** Before considering it complete, do the ilverify
 correctness diff (the `measuring-deobfuscation-correctness-with-ilverify` skill) and update
-`WORKLOG.md`/`IMPROVEMENT_PLAN.md` — "builds and passes the IL inlining tests" is necessary but not
+`ROADMAP.md`/`WORKLOG.md` — "builds and passes the IL inlining tests" is necessary but not
 sufficient for a change in this codebase, since the inlining tests don't cover most of the surface
 area these efforts touch (control-flow rewriting, generic constant decryption, type restoration).
 
@@ -108,5 +120,5 @@ area these efforts touch (control-flow rewriting, generic constant decryption, t
   file path outright.
 - Don't assume a failed git command is a real repository hook problem — check whether it merely
   contains the substring `push` first.
-- Don't skip updating `IMPROVEMENT_PLAN.md`/`WORKLOG.md` because "the commit message covers it" —
+- Don't skip updating `ROADMAP.md`/`WORKLOG.md` because "the commit message covers it" —
   the next session reads these files first, not history.

@@ -70,9 +70,25 @@ than trusting the pass's internal bookkeeping. Treat the current introduced-bug 
 any new attempt that raises it, even temporarily "for now," should be reverted, not merged with a
 TODO.
 
-## Open (defensive) review findings
+## The other dispatch shape: zeroed-local opaque predicates — one failed attempt
 
-- `FindSimplePath` (in `EdgeResolver`) returns the *first* BFS path and does not detect ambiguity,
+`switch((num = (num*A)^B) % k)`, where `num` reads as an un-stored `.locals init`-zeroed local. 37
+sites in the corpus. Seeding the emulator with that zero at a non-entry block was built, measured and
+reverted; the full record is in `ROADMAP.md` §7 item 4. Two things
+to know before touching it:
+
+- **A single fold can only ever resolve the sites whose machine exits on its first iteration** — one
+  of 37 here. The rest run 2–3 junk iterations first, so they need the loop **peeled** (a duplicated
+  dispatch block per iteration). A sound one-edge fold correctly refuses them.
+- **An initial-value claim is not trustworthy over a partially-resolved body.** In the original, that
+  state is often seeded on the *evaluation stack* by an outer machine's case body, with the store and
+  the load in two different blocks. After partial resolution those blocks can merge and the seeding
+  push is gone, so `ldloc` reads the init zero where the original read a computed state. Acting on it
+  deleted a live branch, and every gate passed on the result.
+
+## Open (defensive) review findings — ALL ADDRESSED (WORKLOG #6); kept for the reasoning
+
+- `FindSimplePath` (in `EdgeResolver`) returned the *first* BFS path and did not detect ambiguity,
   despite its doc comment claiming otherwise — a wrong stateVar seed can be silently derived when
   multiple case→predecessor paths differ. Worth an explicit ambiguity check before trusting a
   single-path result in an edge case.

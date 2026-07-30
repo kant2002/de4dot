@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 ONLY, and deliberately not multitargeted. This worker exists precisely because the
+         runtime it executes the target assembly under has to be chosen independently of whatever the
+         de4dot host targets: .NET 10's loader rejects Reactor-obfuscated assemblies, which silently
+         disables all constant and string decryption. Raising this is the one change that reintroduces
+         that bug. See ConstDataProtocol and Program for the full explanation. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>de4dot.constdata</AssemblyName>
+    <Nullable>enable</Nullable>
+    <WarningsAsErrors>true</WarningsAsErrors>
+    <!-- Self-contained single-file publishing is inherited from Directory.Build.props; the worker has
+         no dependencies of its own, so it stays a small standalone executable. -->
+  </PropertyGroup>
+
+</Project>

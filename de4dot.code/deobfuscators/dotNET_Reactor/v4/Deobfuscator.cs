@@ -702,8 +702,72 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			FixEntryPoint();
 			CleanDisplayClasses();
 			FixFakeInstanceStubs();
+			VerifyStateMachines();
 
 			base.DeobfuscateEnd();
+		}
+
+		/// <summary>
+		///     Gate 5: trace every dispatch state machine in the output and report the ones that
+		///     never reach an exit.
+		///
+		///     This is the only gate that can see a dispatch resolved to the WRONG target. Such a
+		///     method is fully verifiable, has a balanced stack, is not empty, and still contains a
+		///     reachable ret -- reachable as a switch target that no state value ever selects. It just
+		///     loops forever, and in the decompiled output it silently looks like a SHORTER method,
+		///     because every statement past the mis-resolved edge is unreachable.
+		///
+		///     Reports rather than rewrites: a finding here means an earlier pass produced wrong
+		///     output, so the fix belongs in that pass. Surfacing it is what makes the bug class
+		///     visible at all instead of only downstream in a decompiler.
+		/// </summary>
+		void VerifyStateMachines() {
+			int loops = 0, undecidable = 0, terminates = 0;
+			foreach (var type in module.GetTypes()) {
+				foreach (var method in type.Methods) {
+					if (!method.HasBody || method.Body.Instructions.Count == 0)
+						continue;
+					bool hasSwitch = false;
+					foreach (var instr in method.Body.Instructions) {
+						if (instr.OpCode.Code == Code.Switch) { hasSwitch = true; break; }
+					}
+					if (!hasSwitch)
+						continue;
+
+					StateMachineTrace trace;
+					try {
+						trace = StateMachineTracer.Trace(new Blocks(method), method);
+					}
+					catch {
+						continue; // never let a diagnostic break the run
+					}
+
+					switch (trace.Verdict) {
+					case StateMachineVerdict.Loops:
+						loops++;
+						Logger.Instance.Log(false, null, LoggerEvent.Warning,
+						"Non-terminating dispatch in {0} (states {1}) -- a switch was resolved to "
+							+ "the wrong target, so statements past it are unreachable and absent from the "
+							+ "output", Utils.RemoveNewlines(method), string.Join(" -> ", trace.States));
+						break;
+					case StateMachineVerdict.Terminates:
+						terminates++;
+						break;
+					default:
+						undecidable++;
+						break;
+					}
+				}
+			}
+			// Reported at normal verbosity even when it finds nothing, on purpose: a gate that goes
+			// silent on success cannot be told apart from a gate that did not run, and "no warning"
+			// then reads as "zero non-terminating machines" to anything scraping this output.
+			if (loops > 0)
+				Logger.w("State-machine trace: {0} non-terminating, {1} terminating, {2} undecidable",
+					loops, terminates, undecidable);
+			else
+				Logger.n("State-machine trace: 0 non-terminating, {0} terminating, {1} undecidable",
+					terminates, undecidable);
 		}
 
 		// Must run after ProxyCallFixer: the fake-instance stubs only become recognizable once their

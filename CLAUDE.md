@@ -8,14 +8,14 @@ de4dot is a .NET deobfuscator and unpacker (GPLv3). It detects which obfuscator 
 
 ## Build Commands
 
-Two solution files exist — one per target framework:
+Solution filters, one per target framework (`de4dot.slnx` is the full solution):
 
 ```bash
-# .NET 8 (primary development target)
-dotnet build -c Release de4dot.netcore.sln
+# .NET (primary development target — net10.0 since the upstream multitargeting change)
+dotnet build -c Release de4dot.net.slnf
 
 # .NET Framework 4.8
-dotnet build -c Release -f net48 de4dot.netframework.sln
+dotnet build -c Release -f net48 de4dot.netframework.slnf
 
 # Full release build (both targets, via build.ps1)
 pwsh build.ps1
@@ -66,7 +66,63 @@ Deobfuscators can also be loaded as plugins from a `bin/` directory adjacent to 
 
 ### Shared build configuration
 
-`De4DotCommon.props` sets target framework, language version, signing, and output path for all projects. `Directory.Packages.props` manages centralized NuGet package versions (dnlib 3.6.0).
+`Directory.Build.props` sets language version, signing, and output path for all projects; each csproj
+declares its own `TargetFrameworks` (net48;net10.0). It replaced `De4DotCommon.props` in the upstream
+multitargeting change. Note the fork disables `SignAssembly` on non-Windows: strong-name signing uses a
+SHA1 digest that OpenSSL rejects where SHA1 signatures are disabled, which kills the build outright.
+
+**One project is deliberately pinned to net8.0: `de4dot.constdata`.** Reactor's constant/string
+decrypter obtains its data array by loading the obfuscated assembly and running its `.cctor`, and
+.NET 10's loader rejects Reactor metadata with `BadImageFormatException: Enclosing type(s) not found`
+— which silently leaves every constant and string encrypted. That load happens in the
+`de4dot.constdata` worker process, pinned to net8.0 so the host can target net10.0 freely. Raising the
+worker's target reintroduces the bug; raising the host's does not. Full history, the measured numbers,
+and the fail-closed invariant the worker must preserve: `ROADMAP.md` §8.
+
+`Directory.Packages.props` manages centralized NuGet package versions (dnlib 4.5.0 — a fork delta;
+upstream is on 3.6.0).
+
+## Documentation rules
+
+Two root-level documents, and the split is strict:
+
+- **`ROADMAP.md`** — the only narrative document. Measured state, the correctness metric, every root
+  cause, the gate hierarchy, failed experiments, the ordered path to done.
+- **`WORKLOG.md`** — a bare checkbox queue. One line per task, pointing at a ROADMAP section.
+
+**Every fact has exactly one home, and you link to it rather than restating it.** This is not a style
+preference. These two files were merged out of three (`ROADMAP` + `IMPROVEMENT_PLAN` + `WORKLOG`) that
+each restated the correctness metric, the corrected baseline, and the same root causes. The copies
+drifted until they contradicted each other — the roadmap simultaneously claimed 0 and 7 broken state
+machines, and said gate 5 both did and did not exist in-tree — and by then there was no way to tell
+which copy was right without re-measuring from the binaries. The build commands in a skill file named
+a solution file that had not existed for two framework versions. A second copy of a fact is a
+liability, not redundancy: it cannot be kept in sync, and its existence destroys your ability to trust
+either copy.
+
+Concretely, when writing docs here:
+
+- Adding "just a brief summary" of something already documented elsewhere is the failure mode. Link.
+- Numbers (baselines, corpus counts, gate results) belong wherever the gate that produces them is
+  defined, never inline in a second document.
+- If a section has gone stale, fix it or delete it. Leaving it and writing the correct version
+  somewhere else is what produced every contradiction above.
+- Prefer deleting a paragraph to hedging it. A doc nobody trusts costs more than a doc that is short.
+
+**This repository must read as fully self-contained.** de4dot is a general-purpose .NET
+deobfuscator, and its correctness argument has to stand on its own. In docs, skills, code comments and
+commit messages, do not name or allude to any other repository, organisation, or piece of work that
+happens to supply test material — not even indirectly ("the consumer", "the project using this",
+"downstream"). Nothing here should imply that such a thing exists.
+
+Practical form of the rule:
+
+- Corpus assemblies are `S1`, `S2`, `S3`. Never their real filenames, product names, or vendor.
+- Describe external tooling by what it measures, never by its name or path.
+- Illustrative identifiers must be de4dot-generated or invented. Do not paste a type name, string
+  literal or API name lifted from a target assembly if it would identify what that assembly is.
+- The metric is *target*-internal types, meaning types defined in the assembly under deobfuscation.
+  Do not characterise the targets beyond that.
 
 ## Key dnlib types used throughout
 

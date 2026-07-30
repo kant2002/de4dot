@@ -24,8 +24,10 @@ using System.Diagnostics.CodeAnalysis;
 using dnlib.DotNet.Emit;
 
 namespace de4dot.blocks.cflow {
-	class SwitchCflowDeobfuscator : BlockDeobfuscator {
+	class SwitchCflowDeobfuscator : BlockDeobfuscator, ISwitchDispatchResolver {
 		InstructionEmulator instructionEmulator = new InstructionEmulator();
+
+		public bool SuppressDispatchResolution { get; set; }
 
 		/// <summary>
 		///     One pending switch rewrite. Produced by the Plan* methods without touching the graph, so a
@@ -106,6 +108,8 @@ namespace de4dot.blocks.cflow {
 		}
 
 		protected override bool Deobfuscate(Block switchBlock) {
+			if (SuppressDispatchResolution)
+				return false;
 			if (switchBlock.LastInstr.OpCode.Code != Code.Switch)
 				return false;
 
