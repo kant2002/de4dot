@@ -5,6 +5,25 @@ description: The meta-workflow and toolchain gotchas for iterating on this de4do
 
 # Iterating Safely on a de4dot Fork
 
+## Running the tests
+
+```bash
+python3 tests/run_xorswitch_tests.py --fetch-tools   # portable, works on Linux
+pwsh test.ps1                                        # Windows only
+```
+
+`test.ps1` cannot run outside Windows: hardcoded NETFX tool paths, a `win-x64` de4dot, and a byte
+comparison against checked-in `.cleaned.il` that a different ildasm build will never reproduce. The
+Python runner covers the XorSwitch dispatch fixtures instead, asserting the resolver's *decision*
+(from `DE4DOT_XORSWITCH_TRACE`) plus the resulting payload sequence. `--fetch-tools` restores `ilasm`
+from NuGet, because it ships in no SDK and finding that out costs an hour.
+
+Two CLI traps the fixtures encode, both of which produce confusing failures rather than errors:
+`-v` is **global** and must precede the filename, while `-p <type>` is **per-file** and must follow
+it — mis-ordered, de4dot reports "Missing input file". And these fixtures need `-p dr4`: they carry
+no Reactor markers, so detection would score them as something else and the pass under test would
+never run at all.
+
 ## When to use
 
 - Starting a nontrivial improvement effort (more than a one-line fix) on this fork.
