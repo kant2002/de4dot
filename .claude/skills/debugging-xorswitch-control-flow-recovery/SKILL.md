@@ -16,12 +16,23 @@ description: Working on the .NET Reactor v4 XorSwitch control-flow resolver (de4
 ## Pipeline shape
 
 ```
+RelationalDispatchResolver — chained MULTI-SITE machines: walks the whole machine forward and
+                             either resolves it entirely or changes nothing. Runs FIRST.
 DispatchDetector      — finds candidate affine dispatch sites (state var + switch)
 StateUpdateFinder     — locates the state-update expression at the end of a case body
 EdgeResolver          — resolves case -> next-state edges by emulating the affine chain
 SwitchRewriter        — rewrites resolved edges into direct branches / removes the switch
 OpaquePredicateFixer  — handles opaque-predicate variants of the same pattern
+XorSwitchTrace        — diagnostic only; DE4DOT_XORSWITCH_TRACE=<substring of a method's full
+                        name> logs every state seed with its provenance. Needs de4dot's -v.
 ```
+
+**The two resolvers answer different questions and must not be conflated.** `EdgeResolver` derives a
+seed for one dispatch from case attribution; `RelationalDispatchResolver` derives nothing — it carries
+the configuration (pending stack values in order, every local, which dispatch is next) along the edge
+as it interprets the method forward from its first instruction. When a machine spans two dispatches
+the second is the only one that can be right, because the state a predecessor is entered with depends
+on which arm of the *other* dispatch fired. See ROADMAP §5.
 
 The core transform being reversed: a state variable driving a `switch`, where the next-state value
 is produced by `(state * mul) ^ xor` (int32-overflow arithmetic) before the next dispatch — the same
@@ -44,7 +55,18 @@ not crashes. This is why the `measuring-deobfuscation-correctness-with-ilverify`
 count is the only trustworthy signal here — a method that "resolved cleanly" by this pass's own
 bookkeeping can still be wrong.
 
-## Three failed attempts at two-variable (nested) dispatch — do not repeat these
+## Two-variable (nested) dispatch: slice 1 has landed — read this before touching it
+
+`RelationalDispatchResolver` resolves the subset needing no block duplication (every transition
+determined, no payload block entered twice). Branch-and-select rejections went **19 → 5 with zero new
+rejections**; ROADMAP §7 item 3 has the measurements, the acceptance rule (diff the *set* of rejected
+method identities, never the count) and the three defects found building it. Slice 2 — specialising a
+payload block entered in two configurations — is open.
+
+The four attempts below all predate it and all tried to rewrite edges in place rather than generate
+from an explored walk. They are kept because their failure modes are still live hazards for slice 2.
+
+## Four failed attempts at two-variable (nested) dispatch — do not repeat these
 
 Some methods nest an **outer plain-int `switch(state)`** around the **inner affine xor-switch**.
 Only the inner layer is currently recognized. Three joint-resolution attempts, all reverted:
