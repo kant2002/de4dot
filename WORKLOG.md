@@ -39,18 +39,12 @@ Run order and each gate's blind spot: ROADMAP §4.
   relational (inner state **plus** outer-dispatch arm) and `DispatchNode` cannot represent it. Folded
   into **#5**. ROADMAP §5 — read it before writing any new attribution rule or seed guard.
 
-## Open
-
 - [x] **5.** Two-variable chained dispatch — **DONE.** Slice 1 (walk the machine) 19 → 5, slice 2
   (specialise the region) 5 → **0**. Export reviewed method-by-method against the original binary;
   6 IL methods, all faithful, one conditional on the module-constant fold. ROADMAP §7 item 3.
-- [x] ~~**5b.** slices 2-3~~ — slice 2 done; slice 3 (relax determinism) not needed at 0 rejections.
-  `RelationalDispatchResolver` walks the machine forward carrying the configuration on the edge, so
-  there is no seed and no case attribution. Branch-and-select rejections 19 → 5 with **zero** new
-  rejections, every other gate unchanged. Slice 2 = specialise a payload block entered in two
-  configurations. **Slice 2 attempted and reverted**: a Reactor payload spans several blocks, so it is
-  a *region* that needs specialising, not a block — it resolved nothing and the scope boundary is the
-  finding. Fixtures now exist and pass (`tests/run_xorswitch_tests.py`). ROADMAP §7 item 3.
+
+## Open
+
 - [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
   drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
