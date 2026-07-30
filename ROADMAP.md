@@ -302,11 +302,20 @@ before trusting any new green number.
 
 ---
 
-## 5. The contained defect: `EdgeResolver` seeds a transform block with its own output
+## 5. The contained defect: the state a dispatch predecessor is entered with is not representable
 
 This was "7 mis-resolved state machines", the class that stood between here and functional. Gate 5
-now reports **0** of them, but by *containment* (§6), not by fixing the root cause below. It is
-recorded in full because any future attempt to resolve these machines properly has to get past it.
+now reports **0** of them, but by *containment* (§6), not by a fix. It is recorded in full because
+any future attempt to resolve these machines has to get past it.
+
+> **Read this before touching `EdgeResolver` or `DispatchDetector`.** The visible symptom is a
+> transform block seeded with the state its own transform produced. That is downstream of an
+> order-dependent `BuildBlockToCase` attribution — but **correcting the attribution cannot solve these
+> methods**, because the state they need is *relational*: inner dispatch state **plus** which arm of
+> the outer dispatch fired. `DispatchNode` models one switch and one `StateVar` and cannot represent
+> that pair. Do not write another `BuildBlockToCase` rule or another seed guard; four have now failed,
+> and the last one failed for a reason that no fifth can avoid. The evidence is below, in order:
+> symptom, true cause, the dominance experiment, and the representation limit.
 
 **Shape.** A dispatch loop where the traced state sequence never reaches an exit:
 
@@ -502,8 +511,18 @@ errors, 0 unclassified diagnostics).
 > middle actually meant was that the true machines were decidable all along, and the resolution was
 > the only thing making them look otherwise.
 
-Fixing §5's seeding would move these methods from "unresolved but verified terminating" to
-"resolved" — a readability gain, not a correctness one — and any attempt must still pass gate 5.
+**What "terminating" does and does not certify.** The trace establishes that the unresolved form
+*reaches an exit*. It says nothing about whether that form is a **faithful** rendering of the original
+method — a different and stronger property, checkable only by reading the original IL. Faithfulness
+has been verified that way for exactly two of the rejected methods, `AdvisorTemplate::.ctor` and
+`CloneSystem`: in both, the emitted outer/inner switch pair reproduces the original's structure and
+the traced machine matches the original's decoded state sequence. **Do not generalise that to the
+other rejected methods without doing the same comparison for each.** Termination is measured
+corpus-wide; faithfulness is not.
+
+Branch-and-select stays the containment mechanism regardless of §5. It rejects a globally wrong
+result without needing to reconstruct the chained machine, which is precisely why it works where four
+attempts at deciding the same question locally did not.
 
 ---
 
@@ -567,6 +586,12 @@ Ordered by value. Each step must hold every gate in §4.
    rewriter and the shared switch pass, fired 19 times on real rewrites, and left the broken count
    unchanged: the cycles run through cases the plan never touches. The plan/apply split now in place
    is the scaffold this always needed.
+
+   **§5 is the same object, reached from the other side, and it raises the price.** The machines
+   branch-and-select contains are these machines: their transform block's entry state depends on which
+   outer arm fired, so it is not derivable from the inner dispatch alone at any level of attribution
+   precision. Scope this as a representation change — chained dispatch context, transform blocks
+   shared between arms, and stack-carried state inputs — not as an `EdgeResolver` seeding fix.
 
 4. ~~**Opaque-predicate folding with a zero-seeded local.**~~ **ABANDONED — built, measured, reverted.
    Do not retry as specified; the premise is false.** The other Reactor dispatch shape is

@@ -30,13 +30,17 @@ Run order and each gate's blind spot: ROADMAP §4.
 
 ## Open
 
-- [ ] **5.** Two-variable chained dispatch (Exp 4) — deferred. Needs joint inner+outer resolution,
-  explicit stack rebalancing, and per-method re-verification gating. Three prior attempts all produced
-  invalid IL; **read ROADMAP §7 item 3 before starting** rather than re-deriving them.
+- [ ] **5.** Two-variable chained dispatch — deferred, and it is a **representation change**, not a
+  seeding fix: chained dispatch context, shared transform blocks, stack-carried inputs. Needs joint
+  inner+outer resolution, explicit stack rebalancing, and per-method re-verification gating. Three
+  prior attempts all produced invalid IL; **read ROADMAP §7 item 3 and §5 before starting** rather
+  than re-deriving them.
 - [ ] **10.** Closure/lambda inlining for nested `<>c__DisplayClass` — readability. ROADMAP §7 item 5.
-- [ ] **11.** Resolve the machines contained by branch-and-select, by fixing the `EdgeResolver`
-  double-apply itself — readability, not correctness. ROADMAP §5 for the root cause and the three
-  local heuristics that failed; any attempt must pass gate 5.
+- [x] **11.** ~~Resolve the machines contained by branch-and-select by fixing the `EdgeResolver`
+  double-apply.~~ **CLOSED — not separately actionable.** The seed is wrong because the case
+  attribution is, and correcting the attribution cannot solve these methods: the state they need is
+  relational (inner state **plus** outer-dispatch arm) and `DispatchNode` cannot represent it. Folded
+  into **#5**. ROADMAP §5 — read it before writing any new attribution rule or seed guard.
 - [ ] **12.** Extraction-worker follow-ups: validate the field token before `Module.ResolveField`;
   drain worker stderr asynchronously. Neither touches the fail-closed boundary. ROADMAP §8.
 - [ ] **13.** Low priority / latent, from the v6 branch audit: `IDeobfuscator`'s added member is a
