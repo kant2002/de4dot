@@ -1,6 +1,7 @@
 using System.Reflection.Emit;
 using de4dot.blocks.cflow;
 using dnlib.DotNet;
+using CilBody = dnlib.DotNet.Emit.CilBody;
 using OpCodes = dnlib.DotNet.Emit.OpCodes;
 
 namespace de4dot.blocks.tests {
