@@ -371,10 +371,10 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldelem_I1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
 			case Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
 			case Code.Ldelem_I4: Emulate_Ldelem_I4(instr); break;
-			case Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem_I8: valueStack.Pop(2); valueStack.Push(Int64Value.CreateUnknown()); break;
 			case Code.Ldelem_U1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt8()); break;
 			case Code.Ldelem_U2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt16()); break;
+			case Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem:
 				if (IsInt32ElementType(instr.Operand as ITypeDefOrRef))
 					Emulate_Ldelem_I4(instr);
@@ -403,10 +403,6 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldtoken:	valueStack.Push(new ObjectValue(instr.Operand)); break;
 			case Code.Ldvirtftn:valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 			case Code.Ldflda:	valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
-
-			case Code.Newarr:	Emulate_Newarr(instr); break;
-			case Code.Nop:		break;
-			case Code.Pop:		valueStack.Pop(); break;
 
 			case Code.Stelem:
 			case Code.Stelem_I:
@@ -481,7 +477,10 @@ namespace de4dot.blocks.cflow {
 			case Code.Leave_S:
 			case Code.Localloc:
 			case Code.Mkrefany:
+			case Code.Newarr:	Emulate_Newarr(instr); break;
 			case Code.Newobj:
+			case Code.Nop:		break;
+			case Code.Pop:		valueStack.Pop(); break;
 			case Code.Readonly:
 			case Code.Refanytype:
 			case Code.Refanyval:
