@@ -3,7 +3,7 @@
   <PropertyGroup>
     <!-- Only force x86 if it's .NET Framework. If it's .NET Core, we must use AnyCPU so it can be started by 32-bit and 64-bit dotnet -->
     <TargetFrameworks>net48;net10.0</TargetFrameworks>
-    <PlatformTarget Condition=" '$(TargetFramework)' == 'net48' ">x86</PlatformTarget>
+    <PlatformTarget Condition=" '$(TargetFramework)' == 'net48' AND '$(OS)' == 'Windows_NT' ">x86</PlatformTarget>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
