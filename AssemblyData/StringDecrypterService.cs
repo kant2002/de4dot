@@ -54,6 +54,7 @@ namespace AssemblyData {
 			var methodInfo = FindMethod(methodToken);
 			if (methodInfo == null)
 				throw new ApplicationException($"Could not find method {methodToken:X8}");
+			
             // .NET Reactor v6.x generic decrypter methods have signature !!0 Method<T>(int32).
             // They're open generic definitions that can't be invoked directly — close them
             // as Method<string> so the delegate/emulation decrypter can call them.
@@ -65,10 +66,11 @@ namespace AssemblyData {
                     // If we can't close it, keep the original and let it fail later
                 }
             }
-            var ret = methodInfo.ReturnType;
-            var genericReturn = ret != null && ret.IsGenericParameter;
-            if (!genericReturn && ret != typeof(string) && ret != typeof(object))
-				throw new ApplicationException($"Method return type must be string or object: {methodInfo}");
+
+			var returnType = methodInfo.ReturnType;
+            if (returnType != typeof(string) && returnType != typeof(object) && returnType?.IsGenericParameter != true)
+				throw new ApplicationException($"Method return type must be string, object, or generic: {methodInfo}");
+			
 			return stringDecrypter.DefineStringDecrypter(methodInfo);
 		}
 
