@@ -87,7 +87,7 @@ instructions, fewer unresolved dispatches".
 
 ## 3. What was wrong, and what it taught
 
-Eight bug classes found and fixed. The root causes matter more than the fixes, because they rhyme.
+Eleven bug classes found and fixed. The root causes matter more than the fixes, because they rhyme.
 
 **#1 — Shift out-of-range guard (shared cflow emulator).** `Int32Value`/`Int64Value` `Shl`/`Shr`/
 `Shr_Un`: a shift count that is a nonzero multiple of 32/64 (C# masks the count, making
@@ -207,6 +207,56 @@ rewritten. Measured cost of the ambiguity guard: **+1 residual `switch` on S1 an
 renumbering — the opcode histograms differ only in `br.s`/`brfalse.s` encoding buckets.
 → **Lesson: "defensive" review findings can be correctness bugs wearing a disguise.** This one was
 initially filed as cosmetic; it is the same silent-wrongness family as the phase-6 double-apply below.
+
+**#7 — A `stelem` the emulator could not place was dropped instead of invalidating (shared cflow
+emulator).** `Emulate_Stelem` wrote through to the tracked array only when the opcode, the value and
+the index were all modelled, and did nothing otherwise. Doing nothing leaves the *previous* element
+values standing, and they are then read back as fact: after one tracked store, a second store at an
+unknown index left `ldelem.i4` returning a constant the real code never writes there. That constant
+is what `SwitchCflowDeobfuscator.GetSwitchTarget` picks a switch arm from, so the end state is a
+method rewritten to branch the wrong way — reached through verifiable IL, which is exactly what gate
+1 cannot see and gate 5 was built for. An unplaceable store now blanks the whole array. Tracking is
+confined to int32 arrays (the only element width `stelem`/`ldelem` round-trip without truncating),
+which in turn makes it sound for `newarr` to seed elements as **zero** rather than unknown, since
+`newarr` zero-initialises — a small precision gain that falls out of fixing the correctness bug.
+
+This is the third instance of the family in §3's closing pattern, and the most direct: **"I cannot
+model this" was treated as "this did not happen."** §9's audit of the same type reached "no reachable
+hazard" and was right about what it examined — the aliasing of the backing list across re-emulation —
+but it read the `val is Int32Value` guard as the invariant's keeper without asking what the code does
+when that guard *fails*. A guard that silently skips is not a guard. That note now points here.
+
+**#8 — Dispatch selection ran the once-only passes twice.** `SelectDispatchCandidate` builds a
+resolved and an unresolved candidate by running every body-local pass over the same input twice. Two
+of those passes are not confined to the `Blocks` they are handed: string decryption executes the
+target assembly's own decrypter (out of process, for the delegate and emulate types), and
+`DeobfuscateMethodEnd` is obfuscator-supplied and free to record anything it likes. A decrypter that
+carries state between calls would therefore hand different strings to the candidate that is kept. The
+pass list is split — `RunControlFlowPasses` per candidate, `RunFinalPasses` once, on the winner. The
+trace now runs before string decryption, which costs nothing: the question it answers is whether
+resolving dispatch orphaned the method's exit, and only the control-flow passes can do that. The
+previous code documented this constraint in a comment on the shared method and then violated it two
+lines down.
+
+**#9 — The reachable set excluded exception handlers, and could be silently incomplete.** Two
+independent holes in the same conclusion. First, neither `StateMachineTracer` nor
+`WouldOrphanMethodExit` could reach a handler at all: `TryBlock` keeps handlers in
+`TryHandlerBlocks`, which is not part of the `BaseBlocks` that `GetAllBlocks()` descends into, and no
+branch may transfer into one — so a method whose only `ret`/`throw` sits in a catch or finally looked
+like it could never exit. That answers `Loops`, which the caller acts on by **discarding a good
+rewrite** — the one failure direction the tracer's own doc comment says is not allowed. Handlers are
+now scheduled when their protected region is reached, entered with an empty abstract stack (under-deep
+is the safe direction: `ValueStack.Pop` on empty yields unknown rather than throwing, so every read
+widens instead of inventing a value). Second, `StateMachineTracer` keyed its visited set on a string
+built from `Block.GetHashCode()`, so two colliding blocks merged into one configuration and dropped
+part of the set. A `Loops` verdict rests entirely on that set being **complete**, so it must not
+depend on hash luck; `Configuration` now compares by value and by block identity.
+
+**Corpus effect of #7–#9: none, and that is the honest result.** Gate JSON is identical before and
+after across S1/S2/S3, and the deobfuscated assemblies differ by exactly 16 contiguous bytes each —
+the MVID, regenerated on every write. A re-export produced an empty diff. All three close failure
+modes this corpus does not currently trigger, so the corpus cannot confirm the fixes either; #7 in
+particular still wants a unit test, since it was derived by reading rather than by a reproduction.
 
 **Two XorSwitch fixes recorded separately** because they predate the numbered queue:
 
@@ -1471,7 +1521,14 @@ rather than fixed, because a fix manufactured to empty a queue is worse than a r
   DIMs need .NET Standard 2.1 / .NET Core 3.0+, and `de4dot.code` targets `net48;net10.0`. Revisit
   only if net48 is dropped *and* an external plugin is known to implement the interface directly.
 
-- **`TrackedArrayValue` mutability — DOCUMENTED INVARIANT, no reachable hazard.** It wraps a
+- **`TrackedArrayValue` mutability — DOCUMENTED INVARIANT, no reachable *aliasing* hazard.** Scope
+  correction: this audit examined aliasing of the backing list and its four points below still hold.
+  It did **not** examine what `Emulate_Stelem` does when its guard fails, and there the answer was
+  wrong — see §3 #7, which fixed it. Point 4 below is the load-bearing one: it recorded that `stelem`
+  only stores `Int32Value` as if that were the invariant's keeper, when the guard enforcing it
+  silently skipped the store rather than invalidating, leaving a stale known value to be read back.
+  Treat "the guard means only X gets in" as an incomplete reading unless the failing branch is
+  written down too. It wraps a
   `List<Value>` that `Emulate_Stelem` mutates in place, so the concern was aliasing across
   speculative re-emulation. It cannot escape, and the reasons are worth keeping because a future
   change could each break one of them:

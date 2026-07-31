@@ -91,6 +91,14 @@ Run order and each gate's blind spot: ROADMAP §4.
   find: removal is queued, not immediate, so readers must be checked against `GetMethodsToRemove()`.
   Bisect lever `DE4DOT_NO_OPAQUE_PREDICATES=1`. ROADMAP §7b.
 
+- [x] **20.** Review findings on the split core branch — **DONE, three correctness fixes, corpus
+  unmoved.** An unplaceable `stelem` dropped instead of invalidating the tracked array (§3 #7);
+  dispatch selection running string decryption and `DeobfuscateMethodEnd` for both candidates
+  (§3 #8); the reachable set excluding exception handlers, plus a visited-set key built from
+  `Block.GetHashCode()` (§3 #9). Gates identical on S1/S2/S3, output differs only by MVID, re-export
+  empty — all three close failure modes this corpus does not reach. Test debt filed as **21**.
+  ROADMAP §3 #7–#9.
+
 ## Open
 
 - [ ] **17.** Make phase 3's seed fallback sound. Attribution is fixed — the per-case BFS no longer
@@ -104,6 +112,12 @@ Run order and each gate's blind spot: ROADMAP §4.
   `allSeeds`. Making it decline instead was built, measured and reverted (`goto` 129 → 1772):
   the guess is load-bearing corpus-wide, so it has to become *sound*, not go away. #16's containment
   catches the bad candidate meanwhile. ROADMAP §7a, and §5 before writing any seed rule.
+
+- [ ] **21.** Unit-test the shared emulator's array tracking. §3 #7 was derived by reading, and the
+  corpus does not exercise it — gate JSON was identical before and after, so nothing here would have
+  caught the bug or would catch its return. The three cases worth pinning: a dropped store at an
+  unknown index must not leave a readable constant, `newarr` zero-seeding must survive a modelled
+  store, and a non-int32 array must not be tracked at all. ROADMAP §3 #7.
 
 Add new work here rather than reopening a closed item; if a closed finding turns out to be
 wrong, correct the ROADMAP section that owns it and open a fresh entry pointing at it.
