@@ -2,13 +2,16 @@
 """
 Run the .NET Reactor IL fixtures: assemble -> de4dot -> check what a pass decided.
 
-Covers two passes, because they share every expensive part -- locating ilasm, forcing the Reactor
+Covers three passes, because they share every expensive part -- locating ilasm, forcing the Reactor
 deobfuscator, reading the decision back:
 
   * `RelationalDispatchResolver` -- which dispatch shapes it collapses and which it refuses.
   * `CflowConstantsInliner`      -- whether it folds module constants, which turns on a premise the
                                     corpus can never falsify (there, the premise always holds), so
                                     the refusal path exists only here.
+  * `DotNetReactorCflowDeobfuscator` -- whether it folds a call-based opaque predicate, and more
+                                    importantly which ones it refuses. A wrong fold deletes a live
+                                    arm and still verifies, so nothing else in the tree catches it.
 
 Why this exists alongside test.ps1
 ----------------------------------
@@ -307,6 +310,32 @@ EXPECTATIONS = [
                                                   helper_for="Consts"),
                 log_contains=["not folding", "Target::Helper"],
                 il_contains=["Consts", "ldsfld"]),
+
+    # --- DotNetReactorCflowDeobfuscator: folding a call-based opaque predicate ------------------
+    # Three bodies in the same position, differing only in what the callee can be proven to return.
+    # Getting one of these wrong deletes a live arm and leaves a method that still verifies and still
+    # terminates, so no gate downstream reports it -- these fixtures are the only thing that does.
+
+    # Nothing assigns the tested field, so the predicate is a constant and the Dead arm is not code.
+    Expectation("opaque_fold",
+                log_contains=["Reactor cflow: folded predicate", "Pred::Test"],
+                log_lacks=["fold declined"],
+                calls=["Live"],
+                body_lacks=["Marker::Dead"]),
+
+    # `return Pick() > 0` in the same position: a real branch that ends in `cgt; ret`, which is what
+    # the previous last-instruction heuristic mistook for a predicate. Both arms must survive.
+    Expectation("opaque_real_computation",
+                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test"],
+                log_lacks=["folded predicate"],
+                il_contains=["Marker::Dead", "Marker::Live"]),
+
+    # The field IS assigned -- through ldsflda, so the module contains no store to find. A write check
+    # that looks for stsfld folds this one and is wrong about which arm runs.
+    Expectation("opaque_field_written_by_address",
+                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test"],
+                log_lacks=["folded predicate"],
+                il_contains=["Marker::Dead", "Marker::Live"]),
 ]
 
 

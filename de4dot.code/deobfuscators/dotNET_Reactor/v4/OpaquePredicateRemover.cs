@@ -201,18 +201,15 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					if (method.Body == null)
 						continue;
 					foreach (var instr in method.Body.Instructions) {
-						if (instr.Operand is FieldDef field && watchedFields.Contains(field)) {
-							switch (instr.OpCode.Code) {
-							case Code.Ldsfld:
-							case Code.Ldfld:
+						// The load-only rule and the MemberRef resolution both live in
+						// NeverWrittenStaticFields, which the cflow predicate fold reads too: an
+						// address, a store, or anything else naming the field -- including an
+						// ldtoken handing it to reflection -- is a possible write.
+						if (NeverWrittenStaticFields.GetField(instr) is { } field && watchedFields.Contains(field)) {
+							if (NeverWrittenStaticFields.IsLoad(instr.OpCode.Code))
 								readers[field].Add(method);
-								break;
-							// An address, a store, or anything else that names the field -- including
-							// an ldtoken handing it to reflection -- is treated as a possible write.
-							default:
+							else
 								written.Add(field);
-								break;
-							}
 						}
 						else if (instr.Operand is MethodDef target && watchedMethods.Contains(target))
 							callers[target].Add(method);
