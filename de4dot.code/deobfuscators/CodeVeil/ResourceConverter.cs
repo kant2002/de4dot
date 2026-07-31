@@ -48,7 +48,7 @@ namespace de4dot.code.deobfuscators.CodeVeil {
 		}
 
 		public byte[] Convert() {
-			var resources = new ResourceElementSet();
+			var resources = ResourceElementSet.CreateForResourceReader(module, 2);
 			foreach (var info in infos)
 				resources.Add(Convert(info));
 
@@ -145,7 +145,7 @@ namespace de4dot.code.deobfuscators.CodeVeil {
 				break;
 
 			case 31:	// binary
-				resourceData = dataCreator.CreateSerialized(reader.ReadBytes(info.length));
+				resourceData = dataCreator.CreateBinaryFormatterSerialized(reader.ReadBytes(info.length));
 				break;
 
 			case 21:	// Point (CV doesn't restore this type)
@@ -164,7 +164,7 @@ namespace de4dot.code.deobfuscators.CodeVeil {
 		public static readonly string ReflectionTypeName = "System.Char[],mscorlib";
 		char[] data;
 		public CharArrayResourceData(UserResourceType type, char[] data) : base(type) => this.data = data;
-		public override void WriteData(BinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, data);
+		public override void WriteData(ResourceBinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, data);
 		public override string ToString() => $"char[]: Length: {data.Length}";
 	}
 
@@ -172,7 +172,7 @@ namespace de4dot.code.deobfuscators.CodeVeil {
 		public static readonly string ReflectionTypeName = "System.Drawing.Icon,System.Drawing";
 		Icon icon;
 		public IconResourceData(UserResourceType type, byte[] data) : base(type) => icon = new Icon(new MemoryStream(data));
-		public override void WriteData(BinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, icon);
+		public override void WriteData(ResourceBinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, icon);
 		public override string ToString() => $"Icon: {icon}";
 	}
 
@@ -180,7 +180,7 @@ namespace de4dot.code.deobfuscators.CodeVeil {
 		public static readonly string ReflectionTypeName = "System.Drawing.Bitmap,System.Drawing";
 		Bitmap bitmap;
 		public ImageResourceData(UserResourceType type, byte[] data) : base(type) => bitmap = new Bitmap(Image.FromStream(new MemoryStream(data)));
-		public override void WriteData(BinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, bitmap);
+		public override void WriteData(ResourceBinaryWriter writer, IFormatter formatter) => formatter.Serialize(writer.BaseStream, bitmap);
 		public override string ToString() => "Bitmap";
 	}
 }
