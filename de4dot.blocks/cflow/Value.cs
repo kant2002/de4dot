@@ -64,13 +64,26 @@ namespace de4dot.blocks.cflow {
 	}
 
 	/// <summary>
-	///     Tracked array created by newarr. Reports as Unknown (not Object) so that
-	///     brfalse/brtrue don't resolve branches based on it, but carries the backing
-	///     List&lt;Value&gt; so stelem.i4/ldelem.i4 can track element values.
+	///     An int32 array created by <c>newarr</c> whose element values are being tracked, so that
+	///     <c>stelem</c>/<c>ldelem</c> can round-trip a constant through it.
+	///
+	///     It reports <see cref="ValueType.Unknown"/> rather than <see cref="ValueType.Object"/> on
+	///     purpose: an <c>ObjectValue</c> is treated as provably non-null, which would let
+	///     <c>brfalse</c>/<c>brtrue</c> resolve a branch on the array reference. Tracking elements
+	///     is not meant to buy that, so the reference itself stays opaque.
+	///
+	///     Every slot holds an <see cref="Int32Value"/> for as long as the value exists. The
+	///     emulator maintains that by refusing to track non-int32 arrays and by blanking every slot
+	///     when it meets a store it cannot place — see <c>InstructionEmulator.Emulate_Stelem</c>.
 	/// </summary>
 	public class TrackedArrayValue : ObjectValue {
 		public TrackedArrayValue(List<Value> arr)
 			: base(arr, ValueType.Unknown) { }
+
+		/// <summary>The backing element list. Mutated in place, and aliased by every copy of this
+		/// value on the stack or in a local — which is what makes <c>dup</c> behave correctly.</summary>
+		public List<Value> Elements => (List<Value>)obj!;
+
 		public override string ToString() => "<tracked array>";
 	}
 

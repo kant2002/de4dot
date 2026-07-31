@@ -28,9 +28,12 @@ using de4dot.blocks;
 namespace de4dot.code {
 	public abstract class StringInlinerBase : MethodReturnValueInliner {
 		/// <summary>
-		/// Checks whether a MethodSpec is a generic instantiation with a single type argument
-		/// of System.String (i.e., Method&lt;string&gt;). Used to match .NET Reactor v6.x generic
-		/// decrypter calls like !!0 DecryptMethod&lt;string&gt;(int32).
+		///     Is this a generic instantiation over exactly <c>System.String</c>, i.e.
+		///     <c>M&lt;string&gt;</c>?
+		///
+		///     A decrypter declared as <c>!!0 M&lt;T&gt;(int32)</c> is called through a MethodSpec, and
+		///     only the instantiation over string returns a string. Inlining any other instantiation
+		///     as an <c>ldstr</c> would put a string where the call site expects something else.
 		/// </summary>
 		protected static bool IsGenericStringInstantiation(MethodSpec gim) {
 			var gims = gim?.GenericInstMethodSig;
@@ -51,17 +54,17 @@ namespace de4dot.code {
 				int ldstrIndex = callResult.callStartIndex;
 				block.Replace(ldstrIndex, num, OpCodes.Ldstr.ToInstruction(decryptedString));
 
-				// .NET Reactor sometimes emits castclass [mscorlib]System.String after
-				// the generic decrypter call (since the return type is !!0, not string).
-				// Remove it since we've already inlined the ldstr.
+				// A decrypter returning !!0 rather than string is followed by a castclass to
+				// System.String at the call site. The ldstr just inlined is already a string, so the
+				// cast has nothing left to do.
 				if (ldstrIndex + 1 < block.Instructions.Count) {
 					var instr = block.Instructions[ldstrIndex + 1];
 					if (instr.OpCode.Code == Code.Castclass && instr.Operand.ToString() == "System.String")
 						block.Remove(ldstrIndex + 1, 1);
 				}
 
-				// .NET Reactor wraps some decrypted strings in String.Intern() to deduplicate
-				// at runtime. Since the string is now a compile-time constant, Intern is unnecessary.
+				// Some decrypters hand their result to String.Intern to deduplicate at runtime. An
+				// ldstr operand is already interned by the runtime, so the call is redundant.
 				if (ldstrIndex + 1 < block.Instructions.Count) {
 					var instr = block.Instructions[ldstrIndex + 1];
 					if (instr.OpCode.Code == Code.Call) {

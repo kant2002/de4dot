@@ -333,10 +333,9 @@ namespace de4dot.code {
 		}
 
 		/// <summary>
-		/// Maps method full names to their definitions for inline candidate proxy methods.
-		/// These are trivial wrapper methods (ldarg0..ldargN, call/callvirt/newobj, ret)
-		/// that .NET Reactor creates as call proxies. We inline them by replacing the Call
-		/// instruction at each call site with the actual target opcode+operand.
+		///     Full name to definition, for the proxy methods worth inlining: static methods whose
+		///     whole body is <c>ldarg.0 .. ldarg.N; call/callvirt/newobj target; ret</c>, forwarding
+		///     their arguments unchanged. Each call site is rewritten to invoke the target directly.
 		/// </summary>
 		private Dictionary<string, MethodDef> inlineCandidate;
 		public void DeobfuscateBegin() {
@@ -664,9 +663,11 @@ namespace de4dot.code {
 			if (!HasNonEmptyBody(method))
 				return;
 
-			// Inline proxy methods: replace Call <proxy> with the proxy's actual target instruction.
-			// Must copy BOTH OpCode and Operand — the proxy may use Callvirt or Newobj internally,
-			// and keeping the original Call opcode causes stack imbalance (OverflowException in dnSpy).
+			// Inline proxy methods: replace `call <proxy>` with the proxy's own target instruction.
+			// Both the opcode and the operand have to be copied. A proxy may forward through newobj
+			// or callvirt, and keeping `call` while swapping only the operand leaves the call site
+			// with the wrong stack behaviour -- newobj pushes where call may not, so the body no
+			// longer balances and readers of the result fail on it.
 			var rewritten = false;
 			for (var i = 0; i < method.Body.Instructions.Count; i++) {
 				var instr = method.Body.Instructions[i];
@@ -721,13 +722,23 @@ namespace de4dot.code {
 		/// <summary>
 		///     Every body-local pass that follows <c>DeobfuscateMethodBegin</c>, in order. Returns the
 		///     number of locals <c>OptimizeLocals</c> pruned.
-		///
-		///     Separated out because it is run more than once for some methods, over the same input —
-		///     see <see cref="SelectDispatchCandidate"/>. Nothing in here may commit a module-level side
-		///     effect that a second run would double, or that would outlive a candidate that is thrown
-		///     away.
 		/// </summary>
 		int RunBodyLocalPasses(Blocks blocks, BlocksCflowDeobfuscator cflowDeobfuscator) {
+			int numRemovedLocals = RunControlFlowPasses(blocks, cflowDeobfuscator);
+			RunFinalPasses(blocks);
+			return numRemovedLocals;
+		}
+
+		/// <summary>
+		///     The passes that shape control flow, and nothing else. Returns the number of locals
+		///     <c>OptimizeLocals</c> pruned.
+		///
+		///     Split out from <see cref="RunFinalPasses"/> because these are run twice for some
+		///     methods, over the same input — see <see cref="SelectDispatchCandidate"/>. Everything
+		///     here is confined to the <c>Blocks</c> it is handed, so a candidate that loses costs
+		///     nothing beyond the time it took to build.
+		/// </summary>
+		int RunControlFlowPasses(Blocks blocks, BlocksCflowDeobfuscator cflowDeobfuscator) {
 			int numRemovedLocals = 0;
 			if (options.ControlFlowDeobfuscation) {
 				cflowDeobfuscator.Initialize(blocks);
@@ -742,10 +753,22 @@ namespace de4dot.code {
 					numRemovedLocals = blocks.OptimizeLocals();
 				blocks.RepartitionBlocks();
 			}
+			return numRemovedLocals;
+		}
 
+		/// <summary>
+		///     The passes that must run exactly once per method, on the body that is actually kept.
+		///
+		///     Neither of these is confined to the <c>Blocks</c> it is handed. String decryption runs
+		///     the target assembly's own decrypter — out of process, for the delegate and emulate
+		///     decrypter types — so running it for a candidate that is then discarded both doubles
+		///     that work and lets a decrypter carrying state between calls hand different strings to
+		///     the body that survives. <c>DeobfuscateMethodEnd</c> is obfuscator-supplied and free to
+		///     record whatever it likes about the method it just saw.
+		/// </summary>
+		void RunFinalPasses(Blocks blocks) {
 			DeobfuscateStrings(blocks);
 			deob.DeobfuscateMethodEnd(blocks);
-			return numRemovedLocals;
 		}
 
 		/// <summary>
@@ -781,6 +804,12 @@ namespace de4dot.code {
 		///     That ordering is the point: an earlier attempt rolled a body back *after* those decisions
 		///     had been made, which resurrected calls to proxy methods already committed for deletion and
 		///     left tokens no decompiler could resolve.
+		///
+		///     Only the control-flow passes are run for both candidates. String decryption and
+		///     <c>DeobfuscateMethodEnd</c> reach outside the method body, so they run once, on the
+		///     candidate that won — see <see cref="RunFinalPasses"/>. Deciding before they run costs
+		///     nothing: the question is whether resolving dispatch orphaned the method's exit, and
+		///     only the control-flow passes can do that.
 		/// </summary>
 		int SelectDispatchCandidate(MethodDef method, Blocks normalized, BlocksCflowDeobfuscator cflowDeobfuscator,
 				out IList<Instruction> allInstructions, out IList<ExceptionHandler> allExceptionHandlers) {
@@ -791,32 +820,34 @@ namespace de4dot.code {
 			DotNetUtils.RestoreBody(method, normalizedInstructions, normalizedHandlers);
 			var input = MethodBodySnapshot.Capture(method);
 
-			var resolved = new Blocks(method);
-			int numRemovedLocals = RunBodyLocalPasses(resolved, cflowDeobfuscator);
-			resolved.GetCode(out allInstructions, out allExceptionHandlers);
-			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
-			if (!NeverTerminates(method))
-				return numRemovedLocals;
-
-			input.Restore(method);
-			var unresolved = new Blocks(method);
-			cflowDeobfuscator.SuppressDispatchResolution = true;
-			try {
-				numRemovedLocals = RunBodyLocalPasses(unresolved, cflowDeobfuscator);
-			}
-			finally {
-				cflowDeobfuscator.SuppressDispatchResolution = false;
-			}
-			unresolved.GetCode(out allInstructions, out allExceptionHandlers);
+			var selected = new Blocks(method);
+			int numRemovedLocals = RunControlFlowPasses(selected, cflowDeobfuscator);
+			selected.GetCode(out allInstructions, out allExceptionHandlers);
 			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
 
-			numRejectedDispatchResolutions++;
-			// Normal verbosity, and NAMED, for the same reason the summary below it is: a flat
-			// rejection total can hide one method fixed and another newly broken in the same run, so
-			// the identity is what a before/after comparison has to diff. A name only visible under
-			// -v is a name the acceptance check does not see.
-			Logger.n("Dispatch resolution rejected: {0} -- the resolved machine never exits, kept the unresolved form",
-				Utils.RemoveNewlines(method));
+			if (NeverTerminates(method)) {
+				input.Restore(method);
+				selected = new Blocks(method);
+				cflowDeobfuscator.SuppressDispatchResolution = true;
+				try {
+					numRemovedLocals = RunControlFlowPasses(selected, cflowDeobfuscator);
+				}
+				finally {
+					cflowDeobfuscator.SuppressDispatchResolution = false;
+				}
+
+				numRejectedDispatchResolutions++;
+				// Normal verbosity, and NAMED, for the same reason the summary below it is: a flat
+				// rejection total can hide one method fixed and another newly broken in the same run,
+				// so the identity is what a before/after comparison has to diff. A name only visible
+				// under -v is a name the acceptance check does not see.
+				Logger.n("Dispatch resolution rejected: {0} -- the resolved machine never exits, kept the unresolved form",
+					Utils.RemoveNewlines(method));
+			}
+
+			RunFinalPasses(selected);
+			selected.GetCode(out allInstructions, out allExceptionHandlers);
+			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
 			return numRemovedLocals;
 		}
 		int numRejectedDispatchResolutions;
