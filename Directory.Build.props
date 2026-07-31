@@ -3,13 +3,6 @@
     <Features>strict</Features>
     <LangVersion>latest</LangVersion>
     <SignAssembly>true</SignAssembly>
-    <!-- Fork delta (was SignAssembly=false in the deleted De4DotCommon.props): strong-name
-         signing uses a SHA1 digest, which OpenSSL refuses on distros that disable SHA1
-         signatures, so the build dies with 'invalid digest' before producing anything. The
-         same policy is why de4dot needs OPENSSL_ENABLE_SHA1_SIGNATURES=1 at runtime. Signing
-         is not needed for this fork's use, and keeping it per-OS leaves any single build
-         internally consistent rather than mixing signed and unsigned assemblies. -->
-    <SignAssembly Condition=" '$(OS)' != 'Windows_NT' ">false</SignAssembly>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <AssemblyOriginatorKeyFile>$(MSBuildThisFileDirectory)\de4dot.snk</AssemblyOriginatorKeyFile>
