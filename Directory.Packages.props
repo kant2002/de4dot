@@ -3,6 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="AndreasDorfer.FsCheck.MSTest" Version="3.0.0" />
     <PackageVersion Include="dnlib" Version="4.5.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
     <PackageVersion Include="System.Drawing.Common" Version="10.0.7" />

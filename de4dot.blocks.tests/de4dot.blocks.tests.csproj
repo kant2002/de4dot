@@ -8,6 +8,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="AndreasDorfer.FsCheck.MSTest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\de4dot.blocks\de4dot.blocks.csproj" />
   </ItemGroup>
 
