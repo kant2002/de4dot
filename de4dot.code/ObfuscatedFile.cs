@@ -465,8 +465,14 @@ namespace de4dot.code {
 		}
 
 		IEnumerable<StringDecrypterMethodInfo> GetMethodInfos() {
-			if (!userStringDecrypterMethods)
-				return deob.GetStringDecrypterMethodInfos();
+			if (!userStringDecrypterMethods) {
+				// A deobfuscator that does not provide the richer form is not broken, just older —
+				// wrap its tokens. See IStringDecrypterMethodInfoProvider for why this is a test
+				// rather than a member on IDeobfuscator.
+				return deob is IStringDecrypterMethodInfoProvider provider
+					? provider.GetStringDecrypterMethodInfos()
+					: deob.GetStringDecrypterMethods().Select(token => new StringDecrypterMethodInfo(token));
+			}
 
 			var infos = new List<StringDecrypterMethodInfo>();
 
@@ -495,8 +501,12 @@ namespace de4dot.code {
 				foreach (var method in type.Methods) {
 					if (!method.IsStatic)
 						continue;
-					var ret = method.MethodSig.GetRetType();
-					if (ret.ElementType != ElementType.String && ret.ElementType != ElementType.Object)
+					// GetElementType() is the null-safe extension: a MethodSig can carry a null RetType
+					// when the signature blob was truncated or nested past dnlib's recursion limit,
+					// which is a thing obfuscators emit deliberately. Reading .ElementType directly
+					// turns that into an NRE that aborts the whole scan.
+					if (method.MethodSig.GetRetType().GetElementType() != ElementType.String &&
+						method.MethodSig.GetRetType().GetElementType() != ElementType.Object)
 						continue;
 					if (methodName != null && methodName != method.Name)
 						continue;
@@ -817,29 +827,54 @@ namespace de4dot.code {
 			DotNetUtils.RestoreBody(method, normalizedInstructions, normalizedHandlers);
 			var input = MethodBodySnapshot.Capture(method);
 
-			var selected = new Blocks(method);
-			int numRemovedLocals = RunControlFlowPasses(selected, cflowDeobfuscator);
-			selected.GetCode(out allInstructions, out allExceptionHandlers);
-			DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
+			var resolved = new Blocks(method);
+			int resolvedRemovedLocals = RunControlFlowPasses(resolved, cflowDeobfuscator);
+			resolved.GetCode(out var resolvedInstructions, out var resolvedHandlers);
+			DotNetUtils.RestoreBody(method, resolvedInstructions, resolvedHandlers);
+
+			var selected = resolved;
+			int numRemovedLocals = resolvedRemovedLocals;
+			allInstructions = resolvedInstructions;
+			allExceptionHandlers = resolvedHandlers;
 
 			if (NeverTerminates(method)) {
+				// A Loops verdict proves this method never exits. It does not say that resolving
+				// dispatch is why. A method that legitimately never returns -- a message pump, a
+				// `while (true) switch (...)` service dispatcher -- traces the same way whatever is
+				// done to it, so rejecting on the resolved form alone would suppress correct
+				// resolution and print a rejection naming a method that was never broken. Build the
+				// unresolved form and only reject when IT terminates and the resolved one does not.
 				input.Restore(method);
-				selected = new Blocks(method);
+				var unresolved = new Blocks(method);
 				cflowDeobfuscator.SuppressDispatchResolution = true;
 				try {
-					numRemovedLocals = RunControlFlowPasses(selected, cflowDeobfuscator);
+					numRemovedLocals = RunControlFlowPasses(unresolved, cflowDeobfuscator);
 				}
 				finally {
 					cflowDeobfuscator.SuppressDispatchResolution = false;
 				}
+				unresolved.GetCode(out allInstructions, out allExceptionHandlers);
+				DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
 
-				numRejectedDispatchResolutions++;
-				// Normal verbosity, and NAMED, for the same reason the summary below it is: a flat
-				// rejection total can hide one method fixed and another newly broken in the same run,
-				// so the identity is what a before/after comparison has to diff. A name only visible
-				// under -v is a name the acceptance check does not see.
-				Logger.n("Dispatch resolution rejected: {0} -- the resolved machine never exits, kept the unresolved form",
-					Utils.RemoveNewlines(method));
+				if (NeverTerminates(method)) {
+					// Both loop, so this is the method's own shape. Keep the resolved form, which is
+					// the better output, and say nothing.
+					selected = resolved;
+					numRemovedLocals = resolvedRemovedLocals;
+					allInstructions = resolvedInstructions;
+					allExceptionHandlers = resolvedHandlers;
+					DotNetUtils.RestoreBody(method, allInstructions, allExceptionHandlers);
+				}
+				else {
+					selected = unresolved;
+					numRejectedDispatchResolutions++;
+					// Normal verbosity, and NAMED, for the same reason the summary below it is: a flat
+					// rejection total can hide one method fixed and another newly broken in the same
+					// run, so the identity is what a before/after comparison has to diff. A name only
+					// visible under -v is a name the acceptance check does not see.
+					Logger.n("Dispatch resolution rejected: {0} -- the resolved machine never exits, kept the unresolved form",
+						Utils.RemoveNewlines(method));
+				}
 			}
 
 			RunFinalPasses(selected);

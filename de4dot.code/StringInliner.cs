@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using de4dot.code.AssemblyClient;
@@ -97,6 +98,14 @@ namespace de4dot.code {
 		public override bool HasHandlers => methodTokenToId.Count != 0;
 
 		public DynamicStringInliner(IAssemblyClient assemblyClient) => this.assemblyClient = assemblyClient;
+
+		/// <summary>
+		///     Kept so existing callers still compile and bind. <c>DynamicStringInliner</c> is public
+		///     API, and the richer overload conveys nothing this one does not until
+		///     <see cref="StringDecrypterMethodInfo"/> carries more than a token.
+		/// </summary>
+		public void Initialize(IEnumerable<int> methodTokens) =>
+			Initialize(methodTokens.Select(token => new StringDecrypterMethodInfo(token)));
 
 		public void Initialize(IEnumerable<StringDecrypterMethodInfo> methodInfos) {
 			methodTokenToId.Clear();
@@ -188,11 +197,22 @@ namespace de4dot.code {
 				return null;
 			var handler = stringDecrypters.Find(method);
 			if (handler is null) {
+				var byDef = (method as IMethodDefOrRef)?.ResolveMethodDef();
+				if (byDef is null)
+					return null;
+				handler = stringDecrypters.Find(byDef);
+				if (handler is null)
+					return null;
+			}
+
+			// InlineAllCalls casts this to MethodDef unconditionally, and Find also matches a
+			// MemberRef directly (on declaring-type name + name + signature) -- so normalising only
+			// on the lookup-failed path leaves the successful-MemberRef path to throw
+			// InvalidCastException later, which surfaces as "Could not deobfuscate method" and
+			// silently leaves the method encrypted. Normalise whichever way we got here.
+			if (method is not MethodDef) {
 				var resolved = (method as IMethodDefOrRef)?.ResolveMethodDef();
 				if (resolved is null)
-					return null;
-				handler = stringDecrypters.Find(resolved);
-				if (handler is null)
 					return null;
 				method = resolved;
 			}

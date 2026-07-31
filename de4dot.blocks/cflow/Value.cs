@@ -77,6 +77,8 @@ namespace de4dot.blocks.cflow {
 	///     when it meets a store it cannot place — see <c>InstructionEmulator.Emulate_Stelem</c>.
 	/// </summary>
 	public class TrackedArrayValue : ObjectValue {
+		bool escaped;
+
 		public TrackedArrayValue(List<Value> arr)
 			: base(arr, ValueType.Unknown) { }
 
@@ -84,7 +86,31 @@ namespace de4dot.blocks.cflow {
 		/// value on the stack or in a local — which is what makes <c>dup</c> behave correctly.</summary>
 		public List<Value> Elements => (List<Value>)obj!;
 
-		public override string ToString() => "<tracked array>";
+		/// <summary>
+		///     The reference reached code the emulator does not execute, so nothing about the
+		///     elements can be relied on again.
+		/// </summary>
+		public bool HasEscaped => escaped;
+
+		/// <summary>
+		///     Give up on this array permanently.
+		///
+		///     Sticky on purpose. Blanking the elements without latching would let a later modelled
+		///     <c>stelem</c> re-establish a "known" element, which is wrong once the reference is
+		///     somewhere the emulator cannot see: any subsequent call could reach it through the
+		///     alias that escaped, without ever appearing to touch this value.
+		///
+		///     The element list is shared with every alias, so blanking it here is observed through
+		///     the copies held in locals and elsewhere on the stack.
+		/// </summary>
+		public void Escape() {
+			escaped = true;
+			var elements = Elements;
+			for (int i = 0; i < elements.Count; i++)
+				elements[i] = Int32Value.CreateUnknown();
+		}
+
+		public override string ToString() => escaped ? "<escaped array>" : "<tracked array>";
 	}
 
 	public class NullValue : Value {

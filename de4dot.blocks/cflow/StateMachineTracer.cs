@@ -169,9 +169,16 @@ namespace de4dot.blocks.cflow {
 
 			var seen = new HashSet<Configuration>();
 			var work = new Stack<Configuration>();
-			void Schedule(Block block, Slot[] stack, Slot[] locals) {
-				if (block is null || stack.Length > MaxStackDepth)
+			// Set when a configuration was discarded rather than explored. The set is then incomplete,
+			// so the absence of an exit in it proves nothing and Loops must not be reported.
+			bool incomplete = false;
+			void Schedule(Block? block, Slot[] stack, Slot[] locals) {
+				if (block is null)
 					return;
+				if (stack.Length > MaxStackDepth) {
+					incomplete = true;
+					return;
+				}
 				var config = new Configuration(block, stack, locals);
 				if (seen.Add(config))
 					work.Push(config);
@@ -210,13 +217,24 @@ namespace de4dot.blocks.cflow {
 
 				// An exit anywhere in the reachable set ends the search: it rules OUT the only
 				// verdict that can be proven here. It does not establish that the method terminates.
+				//
+				// Blocks inside an exception handler are explored — their code can branch back into
+				// the machine — but they cannot supply the exit. Handler entries are scheduled on the
+				// assumption that an exception may be raised anywhere in the protected region, which
+				// is the right assumption for reachability and the wrong one for concluding an exit
+				// exists: a `rethrow` in a catch would otherwise clear every machine wrapped in a
+				// try/catch, which is the shape this gate most needs to judge.
+				bool insideHandler = IsInsideExceptionHandler(config.Block);
 				bool exits = false;
 				foreach (var instr in instrs) {
 					switch (instr.OpCode.Code) {
 					case Code.Ret:
+					case Code.Jmp:
+						exits = true;
+						break;
 					case Code.Throw:
 					case Code.Rethrow:
-						exits = true;
+						exits = !insideHandler;
 						break;
 					}
 					if (exits)
@@ -230,8 +248,11 @@ namespace de4dot.blocks.cflow {
 				ScheduleProtectingHandlers(config.Block);
 
 				bool endsInSwitch = end > 0 && instrs[end - 1].OpCode.Code == Code.Switch;
-				bool endsInBranch = end > 0 && (instrs[end - 1].IsBr() || instrs[end - 1].IsConditionalBranch());
-				int emulateTo = endsInSwitch || endsInBranch ? end - 1 : end;
+				// Only the switch terminator is stepped over, because the operand is read back off the
+				// modelled stack below. A branch must be emulated like any other instruction so that
+				// it pops its own condition -- leaving that behind shifts every successor's stack, and
+				// a later switch then reads the wrong slot as its operand.
+				int emulateTo = endsInSwitch ? end - 1 : end;
 
 				Slot[] outStack, outLocals;
 				bool emulated = TryEmulate(method, config, instrs, emulateTo, localCount,
@@ -264,7 +285,7 @@ namespace de4dot.blocks.cflow {
 					continue;
 				}
 
-				if (endsInBranch && instrs[end - 1].IsConditionalBranch()) {
+				if (end > 0 && instrs[end - 1].IsConditionalBranch()) {
 					// The condition is not tracked here -- only int32 dataflow is -- so both sides are
 					// live. Over-approximating a two-way branch is cheap and keeps the proof valid.
 					ScheduleAllSuccessors(config.Block, Schedule, outStack, outLocals);
@@ -274,9 +295,25 @@ namespace de4dot.blocks.cflow {
 				Schedule(config.Block.GetOnlyTarget(), outStack, outLocals);
 			}
 
-			// The set is complete and contains no exit. Nothing the method can do returns.
+			// No exit anywhere in the set -- but that only proves anything if the set is complete.
+			if (incomplete)
+				return result;
 			result.Verdict = StateMachineVerdict.Loops;
 			return result;
+		}
+
+		/// <summary>
+		///     Is this block inside a catch, filter or finally handler?
+		///
+		///     A <see cref="TryHandlerBlock"/>'s parent is the scope enclosing the try, not the
+		///     <see cref="TryBlock"/> itself, so the walk looks for the handler scopes directly.
+		/// </summary>
+		static bool IsInsideExceptionHandler(Block block) {
+			for (var parent = block.Parent; parent != null; parent = parent.Parent) {
+				if (parent is HandlerBlock || parent is FilterHandlerBlock)
+					return true;
+			}
+			return false;
 		}
 
 		static Slot[] AllUnknown(int count) {
@@ -293,7 +330,7 @@ namespace de4dot.blocks.cflow {
 			return slots;
 		}
 
-		static void ScheduleAllSuccessors(Block block, Action<Block, Slot[], Slot[]> schedule,
+		static void ScheduleAllSuccessors(Block block, Action<Block?, Slot[], Slot[]> schedule,
 				Slot[] stack, Slot[] locals) {
 			if (block.Targets is not null) {
 				foreach (var target in block.Targets)
@@ -312,7 +349,12 @@ namespace de4dot.blocks.cflow {
 			outLocals = AllUnknown(localCount);
 			try {
 				var emu = new InstructionEmulator();
-				emu.Initialize(method, true);
+				// NOT emulateFromFirstInstruction: that seeds every local from the zeroed cache when
+				// InitLocals is set, and only indices below MaxTrackedLocals are overwritten from the
+				// configuration below -- so every local past the ceiling would read back as a known 0
+				// in every block. That is a fabricated constant in an analysis whose Loops verdict is
+				// only a proof while every imprecision widens. Unknown is the sound seed.
+				emu.Initialize(method, false);
 				emu.ClearStack();
 				foreach (var slot in config.Stack)
 					emu.Push(slot.Known ? new Int32Value(slot.Value) : (Value)Int32Value.CreateUnknown());

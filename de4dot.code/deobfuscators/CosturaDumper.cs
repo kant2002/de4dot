@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using dnlib.DotNet;
 
 namespace de4dot.code.deobfuscators {
@@ -70,11 +71,20 @@ namespace de4dot.code.deobfuscators {
 				if (name is null || !name.StartsWith(PREFIX, StringComparison.OrdinalIgnoreCase))
 					continue;
 
-				bool compressed = name.EndsWith(COMPRESSED_SUFFIX, StringComparison.OrdinalIgnoreCase);
+				// Test the suffix on what is left after the prefix, not on the whole name: for
+				// `costura.compressed` the two overlap, and trimming a suffix the remainder does not
+				// actually have asks for a negative length and throws out of the constructor.
 				var filename = name.Substring(PREFIX.Length);
+				bool compressed = filename.EndsWith(COMPRESSED_SUFFIX, StringComparison.OrdinalIgnoreCase);
 				if (compressed)
 					filename = filename.Substring(0, filename.Length - COMPRESSED_SUFFIX.Length);
 				if (filename.Length == 0)
+					continue;
+				// The name comes from the input file. Anything that could steer a later write outside
+				// the directory a caller chose is dropped rather than sanitised, because a Costura
+				// entry legitimately never contains a path at all.
+				if (filename.IndexOfAny(new[] { '/', '\\' }) >= 0 || filename.Contains("..") ||
+						Path.IsPathRooted(filename))
 					continue;
 
 				// Costura also embeds .pdb alongside each assembly. Skipping them is not an oversight:

@@ -455,9 +455,8 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shl(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
-			// Out-of-range counts (incl. nonzero multiples of 32) are undefined in CIL and would
-			// fabricate an all-bits-valid mask below (C# masks the count, turning `32 - shift`
-			// into 0). Stay conservative, matching pre-refactor behavior.
+			// A count outside 0..31 is undefined in CIL, so nothing about the result is knowable.
+			// The unsigned compare folds the negative case into the same test.
 			if ((uint)b.Value >= sizeof(int) * 8)
 				return CreateUnknown();
 			if (b.Value == 0)

@@ -106,6 +106,20 @@ namespace de4dot.code.deobfuscators {
 
 		// Returns all string decrypter method tokens
 		IEnumerable<int> GetStringDecrypterMethods();
+	}
+
+	/// <summary>
+	///     Implemented by a deobfuscator that can say more about its string decrypters than a bare
+	///     token.
+	///
+	///     Deliberately a separate interface rather than another member on <see cref="IDeobfuscator"/>.
+	///     Deobfuscators are loaded as external plugins, and adding to that interface breaks every one
+	///     that implements it directly instead of deriving from <c>DeobfuscatorBase</c> — at load time,
+	///     inside a catch that makes the plugin silently disappear. A default interface method cannot
+	///     rescue it either while net48 is a target framework. Callers test for this with `is` and fall
+	///     back to <see cref="IDeobfuscator.GetStringDecrypterMethods"/>.
+	/// </summary>
+	public interface IStringDecrypterMethodInfoProvider {
 		IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos();
 	}
 }

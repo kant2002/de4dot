@@ -52,12 +52,14 @@ namespace de4dot.code.deobfuscators {
 	public class FakeInstanceStubFixer {
 		readonly ModuleDefMD module;
 		readonly List<MethodDef> fixedMethods = new List<MethodDef>();
+		readonly HashSet<MethodDef> delegateTargets = new HashSet<MethodDef>();
 
 		public FakeInstanceStubFixer(ModuleDefMD module) => this.module = module;
 
 		public IList<MethodDef> FixedMethods => fixedMethods;
 
 		public int Fix() {
+			FindDelegateTargets();
 			foreach (var type in module.GetTypes()) {
 				foreach (var method in type.Methods) {
 					if (TryFix(method))
@@ -65,6 +67,28 @@ namespace de4dot.code.deobfuscators {
 				}
 			}
 			return fixedMethods.Count;
+		}
+
+		/// <summary>
+		///     Every method whose address is taken to build a delegate. Making one of those static
+		///     changes what the delegate is bound to and what reflection reports about it, so they are
+		///     excluded regardless of how invalid the stub looks.
+		/// </summary>
+		void FindDelegateTargets() {
+			delegateTargets.Clear();
+			foreach (var type in module.GetTypes()) {
+				foreach (var method in type.Methods) {
+					var body = method.Body;
+					if (body == null)
+						continue;
+					foreach (var instr in body.Instructions) {
+						if (instr.OpCode.Code != Code.Ldftn && instr.OpCode.Code != Code.Ldvirtftn)
+							continue;
+						if ((instr.Operand as IMethodDefOrRef)?.ResolveMethodDef() is MethodDef target)
+							delegateTargets.Add(target);
+					}
+				}
+			}
 		}
 
 		bool TryFix(MethodDef method) {
@@ -77,8 +101,25 @@ namespace de4dot.code.deobfuscators {
 				return false;
 			if (method.IsConstructor || method.IsStaticConstructor || method.IsRuntimeSpecialName)
 				return false;
+			// A property or event accessor cannot go static while its PropertyDef/EventDef still
+			// declares an instance signature -- the result is metadata no loader accepts.
+			if (method.SemanticsAttributes != 0)
+				return false;
+			// Changing the signature of anything visible outside the assembly breaks every external
+			// consumer, and de4dot processes several files in one run.
+			if (method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly)
+				return false;
+			// A stub used to build a delegate would become a static method closed over its first
+			// argument: still runnable, no longer what the delegate type or reflection expects.
+			if (delegateTargets.Contains(method))
+				return false;
 			var sig = method.MethodSig;
 			if (sig == null || !sig.HasThis || sig.Generic)
+				return false;
+			// The stub's own declaring type being generic means call sites reach it through MemberRefs
+			// with their own signatures, which nothing here rewrites -- the definition would move and
+			// the call sites would keep asking for the old shape.
+			if (method.DeclaringType.HasGenericParameters)
 				return false;
 
 			var target = GetForwardedCallTarget(method);
@@ -94,12 +135,16 @@ namespace de4dot.code.deobfuscators {
 				return false;
 			var targetTypeDef = targetDeclType.ResolveTypeDef();
 			// A value-type receiver would need a managed pointer, not an object ref — out of scope.
-			if (targetTypeDef != null && targetTypeDef.IsValueType)
+			// An unresolvable target is not evidence that it is a class: ToTypeSig() would happily
+			// emit a ClassSig for a struct, so a type we cannot inspect is one we do not touch.
+			if (targetTypeDef == null || targetTypeDef.IsValueType)
 				return false;
 
 			// THE GUARD: only touch methods that are already provably invalid. If `this` really is
-			// assignable to the target's declaring type the IL verifies as-is and must be left alone.
-			if (IsAssignableTo(method.DeclaringType, targetDeclType))
+			// assignable to the target's declaring type the IL verifies as-is and must be left alone
+			// — and so must anything the walk could not decide, because "I could not follow the base
+			// chain" is not evidence of a broken method. Only a definite `false` allows the rewrite.
+			if (IsAssignableTo(method.DeclaringType, targetDeclType) != false)
 				return false;
 
 			var receiverSig = targetDeclType.ToTypeSig();
@@ -158,33 +203,76 @@ namespace de4dot.code.deobfuscators {
 			}
 		}
 
-		// Walks the base/interface chain comparing by full name. Name comparison matters here: the
-		// hierarchy usually leaves this module (System.Object, UnityEditor.Editor, ...) and those
-		// TypeRefs frequently cannot be resolved to a TypeDef during deobfuscation, but their names
-		// are always available -- so each level is name-compared BEFORE we need to resolve anything.
-		// Resolution is only needed to keep climbing; when it fails we stop, having already compared
-		// every level we could see.
-		static bool IsAssignableTo(TypeDef type, ITypeDefOrRef targetType) {
+		// Walks the base and interface chain comparing by full name. Name comparison matters here:
+		// the hierarchy usually leaves this module (System.Object and whatever framework or
+		// third-party base the type derives from) and those TypeRefs frequently cannot be resolved to
+		// a TypeDef while deobfuscating, but their names are always available -- so each level is
+		// name-compared BEFORE anything needs resolving.
+		//
+		// Returns null for "cannot tell", which is NOT the same as false. The caller rewrites a
+		// method only when this is definitely false, so an unresolvable base type, a generic base
+		// whose arguments this cannot substitute, or a recursion guard tripping must all report
+		// "unknown" and leave the method alone. Reporting false in those cases is what makes an
+		// ordinary forwarding method look provably invalid.
+		static bool? IsAssignableTo(TypeDef type, ITypeDefOrRef targetType) {
 			if (type == null || targetType == null)
-				return false;
+				return null;
 			string targetName = targetType.FullName;
+			// A type whose base chain names itself is readable metadata and would spin here forever.
+			// de4dot's input is hostile by definition, so the guard is not optional.
+			var visited = new HashSet<TypeDef>();
 
 			for (var current = type; current != null;) {
+				if (!visited.Add(current))
+					return null;
 				if (current.FullName == targetName)
 					return true;
-				foreach (var iface in current.Interfaces) {
-					if (iface.Interface != null && iface.Interface.FullName == targetName)
-						return true;
+
+				switch (InterfacesInclude(current, targetName, visited)) {
+				case true: return true;
+				case null: return null;
 				}
+
 				var baseType = current.BaseType;
 				if (baseType == null)
-					break;
+					return false;			// reached System.Object without a match: genuinely not assignable
 				if (baseType.FullName == targetName)
 					return true;
+				// A generic base carries its arguments in the FullName, so `NS.B`1<System.Int32>` never
+				// name-matches the `NS.B`1<!0>` seen while climbing. Substituting them is out of scope
+				// here, so a generic base means the answer is not knowable by name alone.
+				if (baseType.NumberOfGenericParameters > 0 || baseType.FullName.IndexOf('<') >= 0)
+					return null;
 				var baseTypeDef = baseType.ResolveTypeDef();
 				if (baseTypeDef == null)
-					break;
+					return null;		// cannot see the rest of the chain, so cannot rule the target out
 				current = baseTypeDef;
+			}
+			return false;
+		}
+
+		/// <summary>
+		///     Does <paramref name="type"/> implement <paramref name="targetName"/>, directly or
+		///     through an interface that inherits it? Null when an interface will not resolve.
+		/// </summary>
+		static bool? InterfacesInclude(TypeDef type, string targetName, HashSet<TypeDef> visited) {
+			foreach (var iface in type.Interfaces) {
+				var ifaceRef = iface.Interface;
+				if (ifaceRef == null)
+					continue;
+				if (ifaceRef.FullName == targetName)
+					return true;
+				if (ifaceRef.NumberOfGenericParameters > 0 || ifaceRef.FullName.IndexOf('<') >= 0)
+					return null;
+				var ifaceDef = ifaceRef.ResolveTypeDef();
+				if (ifaceDef == null)
+					return null;
+				if (!visited.Add(ifaceDef))
+					continue;
+				switch (InterfacesInclude(ifaceDef, targetName, visited)) {
+				case true: return true;
+				case null: return null;
+				}
 			}
 			return false;
 		}

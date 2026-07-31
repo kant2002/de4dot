@@ -428,10 +428,32 @@ namespace de4dot.blocks.cflow {
 		void UpdateStack(Instruction instr) {
 			instr.CalculateStackUsage(out int pushes, out int pops);
 			if (pops == -1)
-				valueStack.Clear();
+				PopUntracked(-1);
 			else {
-				valueStack.Pop(pops);
+				PopUntracked(pops);
 				valueStack.Push(pushes);
+			}
+		}
+
+		/// <summary>
+		///     Pop <paramref name="count"/> values (-1 meaning the whole stack), giving up on any
+		///     tracked array among them.
+		///
+		///     Element tracking is only sound while every mutation is modelled, and <c>stelem</c> is
+		///     far from the only way an array's contents change: handing the reference to a call,
+		///     taking an element address with <c>ldelema</c>, storing it into a field, or laundering
+		///     it through a <c>castclass</c> so a later <c>stelem</c> writes through an alias this
+		///     emulator no longer recognises. Enumerating those opcodes is a list that goes stale the
+		///     moment another one is added, so the rule is inverted: only the handful of instructions
+		///     with a dedicated handler keep an array tracked, and consuming one through any other
+		///     path forfeits it.
+		/// </summary>
+		void PopUntracked(int count) {
+			if (count < 0)
+				count = valueStack.Size;
+			for (int i = 0; i < count; i++) {
+				if (valueStack.Pop() is TrackedArrayValue tracked)
+					tracked.Escape();
 			}
 		}
 
@@ -483,7 +505,7 @@ namespace de4dot.blocks.cflow {
 			var val = valueStack.Pop();
 			var idxValue = valueStack.Pop();
 			var obj = valueStack.Pop();
-			if (obj is not TrackedArrayValue tracked)
+			if (obj is not TrackedArrayValue tracked || tracked.HasEscaped)
 				return;
 			var arr = tracked.Elements;
 
@@ -508,7 +530,7 @@ namespace de4dot.blocks.cflow {
 		void Emulate_Ldelem_I4(Instruction instr) {
 			var idxValue = valueStack.Pop();
 			var obj = valueStack.Pop();
-			if (obj is TrackedArrayValue tracked &&
+			if (obj is TrackedArrayValue tracked && !tracked.HasEscaped &&
 				idxValue is Int32Value idx && idx.AllBitsValid() && (uint)idx.Value < (uint)tracked.Elements.Count) {
 				valueStack.Push(tracked.Elements[idx.Value]);
 			}
@@ -1162,7 +1184,9 @@ namespace de4dot.blocks.cflow {
 
 		void Emulate_Call(Instruction instr, IMethod method) {
 			instr.CalculateStackUsage(out int pushes, out int pops);
-			valueStack.Pop(pops);
+			// The callee may rewrite any array it is handed, and may stash the reference somewhere a
+			// later call can reach — hence PopUntracked rather than a plain Pop.
+			PopUntracked(pops);
 			if (pushes == 1)
 				valueStack.Push(GetUnknownValue(method.MethodSig.GetRetType()));
 			else
@@ -1171,6 +1195,10 @@ namespace de4dot.blocks.cflow {
 
 		void Emulate_Castclass(Instruction instr) {
 			var val1 = valueStack.Pop();
+			// The cast result is opaque, so a store through it would not be seen. Forfeit the array
+			// rather than let the original reference keep claiming to know its elements.
+			if (val1 is TrackedArrayValue castTracked)
+				castTracked.Escape();
 
 			if (val1.IsNull())
 				valueStack.Push(val1);

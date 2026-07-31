@@ -108,19 +108,23 @@ namespace de4dot.blocks.cflow {
 		}
 
 		protected override bool Deobfuscate(Block switchBlock) {
-			if (SuppressDispatchResolution)
-				return false;
 			if (switchBlock.LastInstr.OpCode.Code != Code.Switch)
 				return false;
 
-			if (IsSwitchTopOfStack(switchBlock) && DeobfuscateTOS(switchBlock))
-				return true;
+			// Only the three redirect paths below are dispatch resolution. Type1, Type2 and
+			// FixSwitchBranch are block merging and branch normalisation, so suppressing them too
+			// would make the unresolved candidate less deobfuscated than "the resolved one minus the
+			// decision under test", which is the only difference the caller is entitled to compare.
+			if (!SuppressDispatchResolution) {
+				if (IsSwitchTopOfStack(switchBlock) && DeobfuscateTOS(switchBlock))
+					return true;
 
-			if (IsLdlocBranch(switchBlock, true) && DeobfuscateLdloc(switchBlock))
-				return true;
+				if (IsLdlocBranch(switchBlock, true) && DeobfuscateLdloc(switchBlock))
+					return true;
 
-			if (IsStLdlocBranch(switchBlock, true) && DeobfuscateStLdloc(switchBlock))
-				return true;
+				if (IsStLdlocBranch(switchBlock, true) && DeobfuscateStLdloc(switchBlock))
+					return true;
+			}
 
 			if (IsSwitchType1(switchBlock) && DeobfuscateType1(switchBlock))
 				return true;
