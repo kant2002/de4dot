@@ -376,7 +376,7 @@ namespace de4dot.code {
 						if (isValidInlineTarget) {
 							inlineCandidate.Add(m.FullName, m);
 						}
-					}
+					}					
 				}
 			}
 			switch (options.StringDecrypterType) {
@@ -682,7 +682,7 @@ namespace de4dot.code {
 				}
 			}
 
-			if (rewritten) {
+			if (rewritten) {	
 				method.Body.KeepOldMaxStack = true;
 			}
 

@@ -165,10 +165,10 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 						if (dictionary.TryGetValue(ldsfldValue, out var value)) {
 							instrs[i] = Instruction.CreateLdcI4(value);
 							inlined++;
-						}
 					}
 				}
 			}
+		}
 
 			Logger.v("Cflow constants: {0} constant(s) from {1}, inlined at {2} site(s) (called by its declaring type's .cctor)",
 				dictionary.Count, Utils.RemoveNewlines(initializer), inlined);
@@ -196,8 +196,8 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 						if (instr.Operand is IMethod called && AsMethodDef(called) == target) {
 							referrers.Add(method);
 							break;
-						}
-					}
+	}
+}
 				}
 			}
 			return referrers;

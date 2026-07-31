@@ -86,7 +86,7 @@ namespace de4dot.blocks.cflow {
 				return;
 			if (blocksDeobfuscator is ISwitchDispatchResolver resolver)
 				resolver.SuppressDispatchResolution = suppressDispatchResolution;
-			userBlocksDeobfuscators.Add(blocksDeobfuscator);
+				userBlocksDeobfuscators.Add(blocksDeobfuscator);
 		}
 
 		public void Initialize(Blocks blocks) => this.blocks = blocks;

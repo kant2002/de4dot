@@ -265,17 +265,17 @@ namespace de4dot.blocks.cflow {
 				bool isBranch = IsBranchBlock(source);
 				if (!isBranch && !IsBccBlock(source))
 					continue;
-				instructionEmulator.Initialize(blocks, allBlocks[0] == source);
-				instructionEmulator.Emulate(source.Instructions);
+					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
+					instructionEmulator.Emulate(source.Instructions);
 
-				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
-				if (target == null)
-					continue;
+					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
+					if (target == null)
+						continue;
 				plan.Add(isBranch
 					? SwitchRewrite.Branch(source, target)
 					: SwitchRewrite.Bcc(source, target, block));
-			}
-		}
+					}
+				}
 
 		/// <summary>Successors of <paramref name="source"/> with every edge to <paramref name="oldTarget"/> pointed at <paramref name="newTarget"/>.</summary>
 		static List<Block> SuccessorsWithBlockReplaced(Block source, Block oldTarget, Block newTarget) {
@@ -286,7 +286,7 @@ namespace de4dot.blocks.cflow {
 				foreach (var t in source.Targets) {
 					if (t != null)
 						list.Add(t == oldTarget ? newTarget : t);
-				}
+			}
 			}
 			return list;
 		}
@@ -369,7 +369,7 @@ namespace de4dot.blocks.cflow {
 				}
 				else
 					plan.Add(SwitchRewrite.BranchWithPop(source, target));
-			}
+				}
 		}
 
 		//		ldloc N
