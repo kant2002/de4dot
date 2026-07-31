@@ -55,15 +55,14 @@ namespace de4dot.blocks.cflow {
 				prev_method = method;
 
 				cached_args.Clear();
-				foreach (var paramDef in parameterDefs)
-					cached_args.Add(GetUnknownValue(paramDef.Type));
+				for (int i = 0; i < parameterDefs.Count; i++)
+					cached_args.Add(GetUnknownValue(parameterDefs[i].Type));
 
 				cached_locals.Clear();
 				cached_zeroed_locals.Clear();
-				foreach (var localDef in localDefs)
-				{
-					cached_locals.Add(GetUnknownValue(localDef.Type));
-					cached_zeroed_locals.Add(GetDefaultValue(localDef.Type));
+				for (int i = 0; i < localDefs.Count; i++) {
+					cached_locals.Add(GetUnknownValue(localDefs[i].Type));
+					cached_zeroed_locals.Add(GetDefaultValue(localDefs[i].Type));
 				}
 			}
 
