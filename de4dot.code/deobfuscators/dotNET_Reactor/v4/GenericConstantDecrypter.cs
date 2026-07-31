@@ -110,9 +110,8 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				return;
 
 			// Extraction has to run the target's .cctor, so prefer the out-of-process worker: it fixes
-			// the runtime coupling (net10.0's loader rejects Reactor metadata) and keeps hostile code
-			// out of de4dot's process. In-process stays as the fallback for layouts where the worker
-			// was not published alongside the host.
+			// the runtime coupling (net10.0's loader rejects Reactor metadata). In-process stays as the
+			// fallback for layouts where the worker was not published alongside the host.
 			_dataArray = ExtractDataArray(fileData);
 
 			if (_dataArray is null) {
@@ -125,7 +124,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		}
 
 		/// <summary>
-		/// <summary>
 		///     Extracts via the one-shot net8.0 worker process.
 		///
 		///     The module is written to a private temp copy rather than handing the worker the user's
@@ -134,45 +132,28 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		///     from the input tree. Returns null on any failure so the caller can fall back.
 		/// </summary>
 		/// <summary>
-		///     Obtains the data array, preferring the isolated worker.
+		///     Obtains the data array, preferring the worker process.
 		///
-		///     Falling back to in-process extraction is a DOWNGRADE: it runs the target's static
-		///     constructors inside de4dot with no confinement. A hostile target that deliberately
-		///     crashes, hangs or confuses the worker would otherwise escape the sandbox it was just
-		///     placed in simply by failing. So the fallback is permitted only when the worker was
-		///     unavailable -- a deployment problem decided before the target ever ran -- and never when
-		///     the target itself caused the failure. DE4DOT_CONSTDATA_ALLOW_INPROC=1 overrides this for
-		///     operators who accept the risk on input they trust.
+		///     The worker exists because .NET 10's loader rejects Reactor metadata, so in-process
+		///     extraction produces nothing when de4dot itself runs on net10.0. If the worker is not
+		///     available or fails for any reason, fall back to running the .cctor in-process — that is
+		///     what de4dot has always done, and it still works on the .NET Framework build.
 		/// </summary>
 		byte[] ExtractDataArray(byte[] fileData) {
-			var data = TryWorkerExtract(fileData, out var outcome);
+			var data = TryWorkerExtract(fileData);
 			if (data is not null)
 				return data;
 
-			bool forced = Environment.GetEnvironmentVariable("DE4DOT_CONSTDATA_ALLOW_INPROC") == "1";
-			if (outcome == ConstantDataWorker.Outcome.Unavailable || forced) {
-				if (forced && outcome != ConstantDataWorker.Outcome.Unavailable) {
-					Logger.w("Falling back to IN-PROCESS extraction after a {0} because "
-						+ "DE4DOT_CONSTDATA_ALLOW_INPROC=1; the target's static constructors will run "
-						+ "unconfined inside de4dot", outcome);
-				}
-				return TryDynamicExtract(fileData);
-			}
-
-			Logger.w("Refusing to fall back to in-process extraction after a {0}: the target already ran "
-				+ "in the worker, so falling back would let a deliberate failure escape isolation. Set "
-				+ "DE4DOT_CONSTDATA_ALLOW_INPROC=1 to override for trusted input.", outcome);
-			return null;
+			return TryDynamicExtract(fileData);
 		}
 
-		byte[] TryWorkerExtract(byte[] fileData, out ConstantDataWorker.Outcome outcome) {
-			outcome = ConstantDataWorker.Outcome.Unavailable;
+		byte[] TryWorkerExtract(byte[] fileData) {
 			string temp = null;
 			try {
 				temp = Path.Combine(Path.GetTempPath(),
 					"de4dot-constdata-" + Guid.NewGuid().ToString("N") + ".dll");
 				File.WriteAllBytes(temp, fileData);
-				return ConstantDataWorker.TryExtract(temp, _dataField.MDToken.ToInt32(), out outcome);
+				return ConstantDataWorker.TryExtract(temp, _dataField.MDToken.ToInt32());
 			}
 			catch (Exception ex) {
 				Logger.v("Constant-data worker setup failed: {0}: {1}", ex.GetType().Name, ex.Message);

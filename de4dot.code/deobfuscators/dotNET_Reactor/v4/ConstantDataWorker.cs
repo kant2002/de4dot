@@ -27,14 +27,17 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 	///     Parent side of the one-shot constant-data extraction worker.
 	///
 	///     Extraction has to load and run the obfuscated assembly's static constructors. Doing that in
-	///     de4dot's own process coupled the entire tool to a runtime version — .NET 10's loader rejects
-	///     Reactor metadata, which silently disabled every constant and string — and it also meant
-	///     executing hostile code inside the tool. This runs it in a net8.0 child instead: one assembly
-	///     per process, one request, one response, exit.
+	///     de4dot's own process couples the entire tool to a runtime version: .NET 10's loader rejects
+	///     Reactor metadata, which silently disables every constant and string. This runs it in a net8.0
+	///     child instead: one assembly per process, one request, one response, exit.
 	///
-	///     Everything the child says is treated as untrusted. Lengths are validated against a cap chosen
-	///     here before any payload is read, the response magic must match, and a worker that overruns its
-	///     timeout has its whole process tree killed rather than being waited on.
+	///     The child is a compatibility and crash boundary, not a security one — the target's static
+	///     constructor runs with this process's rights either way. Confining that is the operator's
+	///     concern; run de4dot in a container or VM if the input is not trusted.
+	///
+	///     The response is still parsed defensively, because a target that runs arbitrary code can make
+	///     the child say anything: lengths are validated against a cap before any payload is read, the
+	///     magic must match, and a worker that overruns its timeout has its process tree killed.
 	/// </summary>
 	static class ConstantDataWorker {
 		/// <summary>Set to a worker path to override discovery; useful when the layout is unusual.</summary>
@@ -62,31 +65,10 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		const int MaxStderrChars = 8 * 1024;
 
 		/// <summary>
-		///     Why the worker did not produce data. This exists so the caller cannot be tricked into
-		///     downgrading: a hostile target that crashes, hangs or confuses the worker would otherwise
-		///     force a fall back to in-process extraction, escaping the sandbox it was just placed in.
-		///     Only <see cref="Unavailable"/> — a deployment problem, decided before the target is ever
-		///     touched — permits that fallback.
+		///     Runs the worker. Returns the extracted array, or null if it could not be produced for any
+		///     reason, in which case the caller falls back to in-process extraction. Never throws.
 		/// </summary>
-		public enum Outcome {
-			/// <summary>Extraction succeeded.</summary>
-			Ok,
-			/// <summary>Worker executable missing or could not be launched. Target never ran.</summary>
-			Unavailable,
-			/// <summary>Worker ran and reported it could not extract. Target-controlled.</summary>
-			TargetFailure,
-			/// <summary>Malformed or over-long response. Target-controlled.</summary>
-			ProtocolFailure,
-			/// <summary>Worker exceeded its timeout. Target-controlled.</summary>
-			Timeout,
-		}
-
-		/// <summary>
-		///     Runs the worker. Returns the extracted array, or null with <paramref name="outcome"/> set
-		///     so the caller can decide whether falling back is safe. Never throws.
-		/// </summary>
-		public static byte[] TryExtract(string assemblyPath, int fieldToken, out Outcome outcome) {
-			outcome = Outcome.Unavailable;
+		public static byte[] TryExtract(string assemblyPath, int fieldToken) {
 			string worker = FindWorker();
 			if (worker is null) {
 				Logger.v("Constant-data worker not found");
@@ -95,8 +77,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 
 			Process process = null;
 			try {
-				var launch = Sandbox.Wrap(worker, assemblyPath);
-				var psi = new ProcessStartInfo(launch.file) {
+				var psi = new ProcessStartInfo(worker) {
 					RedirectStandardInput = true,
 					RedirectStandardOutput = true,
 					RedirectStandardError = true,
@@ -105,17 +86,10 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 					// scribbling into the output tree.
 					WorkingDirectory = Path.GetTempPath(),
 				};
-#if NETFRAMEWORK
-				psi.Arguments = QuoteArgs(launch.args);
-#else
-				foreach (var a in launch.args)
-					psi.ArgumentList.Add(a);
-#endif
 
 				process = Process.Start(psi);
 				if (process is null)
-					return null;                    // still Unavailable: the target has not run
-				outcome = Outcome.ProtocolFailure;  // from here on the target HAS run
+					return null;
 
 				// stderr is redirected, so it MUST be drained: an undrained pipe fills at a few tens
 				// of KB and the worker then blocks forever on write. The timeout would cover that, but
@@ -140,10 +114,9 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				// completes rather than as a wait that never returns.
 				byte[] result = null;
 				string error = null;
-				bool wellFormed = false;
 				var reader = new System.Threading.Thread(() => {
 					try {
-						result = ReadResponse(process.StandardOutput.BaseStream, out error, out wellFormed);
+						result = ReadResponse(process.StandardOutput.BaseStream, out error);
 					}
 					catch (Exception ex) {
 						error = ex.GetType().Name + ": " + ex.Message;
@@ -154,7 +127,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				if (!reader.Join(Timeout)) {
 					Logger.w("Constant-data worker timed out after {0}s; killing it", Timeout.TotalSeconds);
 					KillTree(process);
-					outcome = Outcome.Timeout;
 					LogStderr(stderrTail);
 					return null;
 				}
@@ -164,14 +136,9 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 
 				if (result is null) {
 					Logger.v("Constant-data worker reported: {0}", error ?? "no data");
-					// A worker that spoke the protocol correctly and said "no data" is a target
-					// failure, not a protocol one; either way the target ran, so neither permits a
-					// fallback.
-					outcome = wellFormed ? Outcome.TargetFailure : Outcome.ProtocolFailure;
 					LogStderr(stderrTail);
 					return null;
 				}
-				outcome = Outcome.Ok;
 				Logger.v("Constant-data worker extracted {0} bytes", result.Length);
 				return result;
 			}
@@ -186,111 +153,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			}
 		}
 
-		/// <summary>
-		///     Optional OS-level confinement for the worker, as a pluggable launcher prefix.
-		///
-		///     The child process on its own is a compatibility and crash boundary, NOT a security one:
-		///     the target's static constructor still runs with this process's filesystem, network and
-		///     process-creation rights. Real confinement is an OS concern, and which mechanism is
-		///     appropriate depends on how much the operator trusts the input -- so de4dot does not pick
-		///     one. It runs the worker under whatever prefix it is told to.
-		///
-		///     DE4DOT_CONSTDATA_SANDBOX:
-		///       unset / "auto"   bubblewrap if present, else unconfined with a warning
-		///       "off"            never confine
-		///       anything else    a command prefix, so any launcher can be dropped in. For example a
-		///                        container runtime, which also gives VM-backed isolation on Windows and
-		///                        macOS where the engine runs Linux containers inside a VM:
-		///                          docker run --rm -i --network none --read-only --tmpfs /tmp
-		///                            --cap-drop ALL --security-opt no-new-privileges --pids-limit 128
-		///                            -m 512m -v &lt;worker&gt;:/w:ro -v &lt;target&gt;:&lt;target&gt;:ro &lt;image&gt; /w/de4dot.constdata
-		///
-		///     Confinement must never break extraction: if the sandbox cannot be built the worker still
-		///     runs unconfined, because failing to deobfuscate a file the user chose to analyse is worse
-		///     than not hardening a step that used to happen in de4dot's own process anyway.
-		/// </summary>
-		static class Sandbox {
-			const string SandboxVar = "DE4DOT_CONSTDATA_SANDBOX";
-			static bool warned;
-
-			public static (string file, string[] args) Wrap(string worker, string targetPath) {
-				var setting = Environment.GetEnvironmentVariable(SandboxVar);
-
-				if (string.Equals(setting, "off", StringComparison.OrdinalIgnoreCase))
-					return (worker, new string[0]);
-
-				if (!string.IsNullOrEmpty(setting) &&
-					!string.Equals(setting, "auto", StringComparison.OrdinalIgnoreCase)) {
-					var parts = setting.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-					var args = new string[parts.Length];              // parts[1..] followed by the worker
-					Array.Copy(parts, 1, args, 0, parts.Length - 1);
-					args[parts.Length - 1] = worker;
-					return (parts[0], args);
-				}
-
-				var bwrap = FindOnPath("bwrap");
-				if (bwrap is not null)
-					return (bwrap, BwrapArgs(worker, targetPath));
-
-				if (!warned) {
-					warned = true;
-					Logger.w("Extraction worker is running UNCONFINED (no bubblewrap found). It executes "
-						+ "the target's static constructors; set DE4DOT_CONSTDATA_SANDBOX to a launcher "
-						+ "prefix for untrusted input.");
-				}
-				return (worker, new string[0]);
-			}
-
-			/// <summary>
-			///     Read-only system and worker, read-only target, private /tmp, no network, no other
-			///     namespaces, dies with the parent. stdin/stdout pass straight through, which is all the
-			///     protocol needs.
-			/// </summary>
-			static string[] BwrapArgs(string worker, string targetPath) {
-				var args = new System.Collections.Generic.List<string>();
-				foreach (var dir in new[] { "/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc" })
-					args.AddRange(new[] { "--ro-bind-try", dir, dir });
-
-				var workerDir = Path.GetDirectoryName(Path.GetFullPath(worker));
-				if (!string.IsNullOrEmpty(workerDir))
-					args.AddRange(new[] { "--ro-bind", workerDir, workerDir });
-				// Order matters: bwrap applies mounts in sequence, so /tmp must be replaced BEFORE the
-				// target is bound into it. Binding first and then mounting the tmpfs hides the target and
-				// the worker fails with FileNotFoundException.
-				args.AddRange(new[] {
-					"--tmpfs", "/tmp",
-					"--proc", "/proc",
-					"--dev", "/dev",
-				});
-				var target = Path.GetFullPath(targetPath);
-				args.AddRange(new[] { "--ro-bind", target, target });
-
-				args.AddRange(new[] {
-					"--unshare-all",
-					"--new-session",
-					"--die-with-parent",
-					"--chdir", "/tmp",
-					"--", worker,
-				});
-				return args.ToArray();
-			}
-
-			static string FindOnPath(string name) {
-				foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "")
-						.Split(Path.PathSeparator)) {
-					if (dir.Length == 0)
-						continue;
-					try {
-						var candidate = Path.Combine(dir, name);
-						if (File.Exists(candidate))
-							return candidate;
-					}
-					catch (Exception) { }
-				}
-				return null;
-			}
-		}
-
 		/// <summary>Keeps only printable characters, so worker text cannot inject terminal escapes.</summary>
 		static string Sanitize(string s) {
 			var sb = new StringBuilder(s.Length);
@@ -302,19 +164,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			}
 			return sb.ToString();
 		}
-
-#if NETFRAMEWORK
-		/// <summary>net48 has no ArgumentList, so build a quoted command line.</summary>
-		static string QuoteArgs(string[] args) {
-			var sb = new StringBuilder();
-			foreach (var a in args) {
-				if (sb.Length > 0)
-					sb.Append(' ');
-				sb.Append('"').Append(a.Replace("\"", "\\\"")).Append('"');
-			}
-			return sb.ToString();
-		}
-#endif
 
 		static void KillTree(Process process) {
 			try {
@@ -363,9 +212,8 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		///     Reads one response. Returns the payload on success, or null with <paramref name="error"/>
 		///     set. Validates the magic and every length before allocating.
 		/// </summary>
-		static byte[] ReadResponse(Stream stdout, out string error, out bool wellFormed) {
+		static byte[] ReadResponse(Stream stdout, out string error) {
 			error = null;
-			wellFormed = false;
 			if (BitConverter.ToUInt32(ReadExactly(stdout, 4), 0) != Magic) {
 				error = "bad response magic";
 				return null;
@@ -400,7 +248,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				error = "trailing bytes after response";
 				return null;
 			}
-			wellFormed = true;
 
 			if (status == StatusOk)
 				return length > 0 ? payload : null;

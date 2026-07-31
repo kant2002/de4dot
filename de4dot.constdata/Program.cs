@@ -34,13 +34,12 @@ namespace de4dot.constdata {
 	///     <c>BadImageFormatException: Enclosing type(s) not found</c>, silently disabling all constant
 	///     and string decryption. Pinning this worker to net8.0 lets the host move on independently.
 	///
-	///     The isolation is real but limited, and the limit matters: a child process gives deterministic
-	///     runtime selection, containment of CLR crashes and <c>Environment.Exit</c>, an enforceable
-	///     timeout, and no contamination of the host's loader state. It is NOT a security boundary — the
-	///     target's static constructor still runs with this process's filesystem, network, environment
-	///     and process-creation rights. Sandboxing that properly needs OS-level confinement around this
-	///     executable (namespaces/seccomp, or AppContainer plus a Job Object) and is deliberately out of
-	///     scope here.
+	///     What the separate process buys, beyond the runtime pinning above: containment of CLR crashes
+	///     and <c>Environment.Exit</c>, an enforceable timeout, and no contamination of the host's
+	///     loader state. It is NOT a security boundary -- the target's static constructor still runs
+	///     with this process's filesystem, network, environment and process-creation rights, exactly
+	///     as it did when de4dot ran it inline. Confining that is the operator's job: run de4dot
+	///     inside a container or VM when analysing input you do not trust.
 	///
 	///     Exits 0 on a well-formed response of either status, and non-zero only when it could not speak
 	///     the protocol at all.
