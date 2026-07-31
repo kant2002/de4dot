@@ -79,16 +79,18 @@ namespace de4dot.blocks.cflow {
 		static Value GetUnknownValue(TypeSig? type) {
 			if (type == null)
 				return new UnknownValue();
-			return type.ElementType switch {
-				ElementType.Boolean => Int32Value.CreateUnknownBool(),
-				ElementType.I1 => Int32Value.CreateUnknown(),
-				ElementType.U1 => Int32Value.CreateUnknownUInt8(),
-				ElementType.I2 => Int32Value.CreateUnknown(),
-				ElementType.U2 => Int32Value.CreateUnknownUInt16(),
-				ElementType.I4 or ElementType.U4 => Int32Value.CreateUnknown(),
-				ElementType.I8 or ElementType.U8 => Int64Value.CreateUnknown(),
-				_ => new UnknownValue()
-			};
+			switch (type.ElementType) {
+			case ElementType.Boolean: return Int32Value.CreateUnknownBool();
+			case ElementType.I1: return Int32Value.CreateUnknown();
+			case ElementType.U1: return Int32Value.CreateUnknownUInt8();
+			case ElementType.I2: return Int32Value.CreateUnknown();
+			case ElementType.U2: return Int32Value.CreateUnknownUInt16();
+			case ElementType.I4: return Int32Value.CreateUnknown();
+			case ElementType.U4: return Int32Value.CreateUnknown();
+			case ElementType.I8: return Int64Value.CreateUnknown();
+			case ElementType.U8: return Int64Value.CreateUnknown();
+			}
+			return new UnknownValue();
 		}
 
 		static Value GetDefaultValue(TypeSig type) {
@@ -366,8 +368,10 @@ namespace de4dot.blocks.cflow {
 			case Code.Conv_Ovf_U8:		Emulate_Conv_Ovf_U8(instr); break;
 			case Code.Conv_Ovf_U8_Un:	Emulate_Conv_Ovf_U8_Un(instr); break;
 
-			case Code.Ldelem_I1 or Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem_I4 or Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
+			case Code.Ldelem_I1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Ldelem_I4: Emulate_Ldelem_I4(instr); break;
+			case Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem_I8: valueStack.Pop(2); valueStack.Push(Int64Value.CreateUnknown()); break;
 			case Code.Ldelem_U1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt8()); break;
 			case Code.Ldelem_U2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt16()); break;
@@ -419,6 +423,86 @@ namespace de4dot.blocks.cflow {
 			case Code.Conv_R4:	Emulate_Conv_R4(instr); break;
 			case Code.Conv_R8:	Emulate_Conv_R8(instr); break;
 
+			case Code.Arglist:
+			case Code.Beq:
+			case Code.Beq_S:
+			case Code.Bge:
+			case Code.Bge_S:
+			case Code.Bge_Un:
+			case Code.Bge_Un_S:
+			case Code.Bgt:
+			case Code.Bgt_S:
+			case Code.Bgt_Un:
+			case Code.Bgt_Un_S:
+			case Code.Ble:
+			case Code.Ble_S:
+			case Code.Ble_Un:
+			case Code.Ble_Un_S:
+			case Code.Blt:
+			case Code.Blt_S:
+			case Code.Blt_Un:
+			case Code.Blt_Un_S:
+			case Code.Bne_Un:
+			case Code.Bne_Un_S:
+			case Code.Brfalse:
+			case Code.Brfalse_S:
+			case Code.Brtrue:
+			case Code.Brtrue_S:
+			case Code.Br:
+			case Code.Br_S:
+			case Code.Break:
+			case Code.Calli:
+			case Code.Ckfinite:
+			case Code.Constrained:
+			case Code.Conv_I:
+			case Code.Conv_Ovf_I:
+			case Code.Conv_Ovf_I_Un:
+			case Code.Conv_Ovf_U:
+			case Code.Conv_Ovf_U_Un:
+			case Code.Conv_U:
+			case Code.Cpblk:
+			case Code.Cpobj:
+			case Code.Endfilter:
+			case Code.Endfinally:
+			case Code.Initblk:
+			case Code.Initobj:
+			case Code.Jmp:
+			case Code.Ldelema:
+			case Code.Ldelem_I:
+			case Code.Ldelem_R4:
+			case Code.Ldelem_R8:
+			case Code.Ldelem_Ref:
+			case Code.Ldind_I:
+			case Code.Ldind_R4:
+			case Code.Ldind_R8:
+			case Code.Ldind_Ref:
+			case Code.Ldobj:
+			case Code.Leave:
+			case Code.Leave_S:
+			case Code.Localloc:
+			case Code.Mkrefany:
+			case Code.Newobj:
+			case Code.Readonly:
+			case Code.Refanytype:
+			case Code.Refanyval:
+			case Code.Ret:
+			case Code.Rethrow:
+			case Code.Stfld:
+			case Code.Stind_I:
+			case Code.Stind_I1:
+			case Code.Stind_I2:
+			case Code.Stind_I4:
+			case Code.Stind_I8:
+			case Code.Stind_R4:
+			case Code.Stind_R8:
+			case Code.Stind_Ref:
+			case Code.Stobj:
+			case Code.Stsfld:
+			case Code.Switch:
+			case Code.Tailcall:
+			case Code.Throw:
+			case Code.Unaligned:
+			case Code.Volatile:
 			default:
 				UpdateStack(instr);
 				break;
