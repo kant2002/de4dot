@@ -9,6 +9,10 @@ publish-net*/
 launchSettings.json
 *.user
 
+# Build output
+/net4*/
+/net[0-9]*.[0-9]*/
+
 # Rider (Sourced from https://github.com/JetBrains/resharper-rider-samples/blob/master/.gitignore)
 
 # Rider User specific
