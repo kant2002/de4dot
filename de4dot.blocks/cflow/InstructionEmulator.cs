@@ -370,12 +370,19 @@ namespace de4dot.blocks.cflow {
 
 			case Code.Ldelem_I1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
 			case Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem_I4: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Ldelem_I4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem_I8: valueStack.Pop(2); valueStack.Push(Int64Value.CreateUnknown()); break;
 			case Code.Ldelem_U1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt8()); break;
 			case Code.Ldelem_U2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt16()); break;
-			case Code.Ldelem_U4: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem:	 valueStack.Pop(2); valueStack.Push(GetUnknownValue(instr.Operand as ITypeDefOrRef)); break;
+			case Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
+			case Code.Ldelem:
+				if (IsInt32ElementType(instr.Operand as ITypeDefOrRef))
+					Emulate_Ldelem_I4(instr);
+				else {
+					valueStack.Pop(2);
+					valueStack.Push(GetUnknownValue(instr.Operand as ITypeDefOrRef));
+				}
+				break;
 
 			case Code.Ldind_I1:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
 			case Code.Ldind_I2:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
@@ -397,7 +404,20 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldvirtftn:valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 			case Code.Ldflda:	valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 
-			case Code.Unbox:
+			case Code.Newarr:	Emulate_Newarr(instr); break;
+			case Code.Nop:		break;
+			case Code.Pop:		valueStack.Pop(); break;
+
+			case Code.Stelem:
+			case Code.Stelem_I:
+			case Code.Stelem_I1:
+			case Code.Stelem_I2:
+			case Code.Stelem_I4:
+			case Code.Stelem_I8:
+			case Code.Stelem_R4:
+			case Code.Stelem_R8:
+			case Code.Stelem_Ref:
+				Emulate_Stelem(instr); break;
 
 			case Code.Conv_R_Un:Emulate_Conv_R_Un(instr); break;
 			case Code.Conv_R4:	Emulate_Conv_R4(instr); break;
@@ -461,24 +481,12 @@ namespace de4dot.blocks.cflow {
 			case Code.Leave_S:
 			case Code.Localloc:
 			case Code.Mkrefany:
-			case Code.Newarr:
 			case Code.Newobj:
-			case Code.Nop:
-			case Code.Pop:
 			case Code.Readonly:
 			case Code.Refanytype:
 			case Code.Refanyval:
 			case Code.Ret:
 			case Code.Rethrow:
-			case Code.Stelem:
-			case Code.Stelem_I:
-			case Code.Stelem_I1:
-			case Code.Stelem_I2:
-			case Code.Stelem_I4:
-			case Code.Stelem_I8:
-			case Code.Stelem_R4:
-			case Code.Stelem_R8:
-			case Code.Stelem_Ref:
 			case Code.Stfld:
 			case Code.Stind_I:
 			case Code.Stind_I1:
@@ -504,10 +512,32 @@ namespace de4dot.blocks.cflow {
 		void UpdateStack(Instruction instr) {
 			instr.CalculateStackUsage(out int pushes, out int pops);
 			if (pops == -1)
-				valueStack.Clear();
+				PopUntracked(-1);
 			else {
-				valueStack.Pop(pops);
+				PopUntracked(pops);
 				valueStack.Push(pushes);
+			}
+		}
+
+		/// <summary>
+		///     Pop <paramref name="count"/> values (-1 meaning the whole stack), giving up on any
+		///     tracked array among them.
+		///
+		///     Element tracking is only sound while every mutation is modelled, and <c>stelem</c> is
+		///     far from the only way an array's contents change: handing the reference to a call,
+		///     taking an element address with <c>ldelema</c>, storing it into a field, or laundering
+		///     it through a <c>castclass</c> so a later <c>stelem</c> writes through an alias this
+		///     emulator no longer recognises. Enumerating those opcodes is a list that goes stale the
+		///     moment another one is added, so the rule is inverted: only the handful of instructions
+		///     with a dedicated handler keep an array tracked, and consuming one through any other
+		///     path forfeits it.
+		/// </summary>
+		void PopUntracked(int count) {
+			if (count < 0)
+				count = valueStack.Size;
+			for (int i = 0; i < count; i++) {
+				if (valueStack.Pop() is TrackedArrayValue tracked)
+					tracked.Escape();
 			}
 		}
 
@@ -527,6 +557,70 @@ namespace de4dot.blocks.cflow {
 				}
 			}
 			valueStack.Push(Int32Value.CreateUnknown());
+		}
+
+		// Element tracking is confined to arrays of 4-byte integers. Those are the only ones whose
+		// elements stelem/ldelem below can round-trip without truncating, and confining it keeps the
+		// invariant that every slot of a tracked array holds an Int32Value.
+		const int MaxTrackedArrayLength = 4096;
+
+		static bool IsInt32ElementType(ITypeDefOrRef? type) =>
+			type?.FullName is "System.Int32" or "System.UInt32";
+
+		void Emulate_Newarr(Instruction instr) {
+			var val = valueStack.Pop();
+			if (val is Int32Value arrSize && arrSize.AllBitsValid() &&
+				arrSize.Value is >= 0 and <= MaxTrackedArrayLength &&
+				IsInt32ElementType(instr.Operand as ITypeDefOrRef)) {
+				// newarr zero-initializes, so an element nothing has written to really is 0. That
+				// only stays true as long as every store is either modelled or invalidates the
+				// array -- see Emulate_Stelem.
+				var arr = new List<Value>(arrSize.Value);
+				for (int i = 0; i < arrSize.Value; i++)
+					arr.Add(Int32Value.Zero);
+				valueStack.Push(new TrackedArrayValue(arr));
+			}
+			else {
+				valueStack.Push(new UnknownValue());
+			}
+		}
+
+		void Emulate_Stelem(Instruction instr) {
+			var val = valueStack.Pop();
+			var idxValue = valueStack.Pop();
+			var obj = valueStack.Pop();
+			if (obj is not TrackedArrayValue tracked || tracked.HasEscaped)
+				return;
+			var arr = tracked.Elements;
+
+			bool storesInt32 = instr.OpCode.Code == Code.Stelem_I4 ||
+				(instr.OpCode.Code == Code.Stelem && IsInt32ElementType(instr.Operand as ITypeDefOrRef));
+			if (storesInt32 && val is Int32Value &&
+				idxValue is Int32Value idx && idx.AllBitsValid() && (uint)idx.Value < (uint)arr.Count) {
+				arr[idx.Value] = val;
+				return;
+			}
+
+			// A store that cannot be placed has to invalidate the whole array rather than be
+			// skipped. Skipping it leaves the earlier element values standing and they are then
+			// read back as facts, so an unknown index -- or a value this emulator did not model --
+			// would let ldelem hand out a constant the real code never stores there. That constant
+			// goes on to pick a switch target in SwitchCflowDeobfuscator, which is how a silently
+			// wrong emulation turns into a method rewritten to branch the wrong way.
+			for (int i = 0; i < arr.Count; i++)
+				arr[i] = Int32Value.CreateUnknown();
+		}
+
+		void Emulate_Ldelem_I4(Instruction instr) {
+			var idxValue = valueStack.Pop();
+			var obj = valueStack.Pop();
+			if (obj is TrackedArrayValue tracked && !tracked.HasEscaped &&
+				idxValue is Int32Value idx && idx.AllBitsValid() && (uint)idx.Value < (uint)tracked.Elements.Count) {
+				valueStack.Push(tracked.Elements[idx.Value]);
+			}
+			else {
+				valueStack.Push(Int32Value.CreateUnknown());
+			}
 		}
 
 		void Emulate_Conv_U1(Instruction instr) {
@@ -1174,7 +1268,9 @@ namespace de4dot.blocks.cflow {
 
 		void Emulate_Call(Instruction instr, IMethod method) {
 			instr.CalculateStackUsage(out int pushes, out int pops);
-			valueStack.Pop(pops);
+			// The callee may rewrite any array it is handed, and may stash the reference somewhere a
+			// later call can reach — hence PopUntracked rather than a plain Pop.
+			PopUntracked(pops);
 			if (pushes == 1)
 				valueStack.Push(GetUnknownValue(method.MethodSig.GetRetType()));
 			else
@@ -1183,6 +1279,10 @@ namespace de4dot.blocks.cflow {
 
 		void Emulate_Castclass(Instruction instr) {
 			var val1 = valueStack.Pop();
+			// The cast result is opaque, so a store through it would not be seen. Forfeit the array
+			// rather than let the original reference keep claiming to know its elements.
+			if (val1 is TrackedArrayValue castTracked)
+				castTracked.Escape();
 
 			if (val1.IsNull())
 				valueStack.Push(val1);
