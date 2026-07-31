@@ -22,8 +22,8 @@ So these fixtures assert a **property** instead of an exact rendering: what
 That is what the pass claims, it is stable across toolchain versions, and a fixture that fails says
 something specific rather than "the output moved".
 
-Requires ilasm; `--fetch-tools` restores it from NuGet if it is missing, so the next person does not
-repeat the archaeology. Nothing here touches the corpus -- the acceptance check for a real change is
+Requires ilasm, and ildasm for the assertions that read the output back; `--fetch-tools` restores
+both from NuGet if they are missing, so the next person does not repeat the archaeology. Nothing here touches the corpus -- the acceptance check for a real change is
 still the downstream scorecard.
 
     python3 tests/run_reactor_tests.py [--fetch-tools] [--keep]
@@ -46,6 +46,7 @@ EXE = ".exe" if sys.platform == "win32" else ""
 # Pinned so a fixture failure is never "the tool moved". Any version that assembles this IL is fine;
 # the assertions do not depend on the assembler's output formatting.
 ILASM_PKG = f"runtime.{RID}.Microsoft.NETCore.ILAsm"
+ILDASM_PKG = f"runtime.{RID}.Microsoft.NETCore.ILDAsm"
 ILASM_VER = "9.0.0"
 
 
@@ -311,24 +312,41 @@ EXPECTATIONS = [
 
 
 def find_ilasm(fetch: bool) -> Path:
-    found = shutil.which("ilasm")
+    return _find_tool("ilasm", ILASM_PKG, fetch, required=True)
+
+
+def find_ildasm(fetch: bool) -> Path | None:
+    """
+    Optional: without it the IL assertions cannot run. They are not silently skipped, though -- a
+    fixture that needs the disassembly and does not have it fails, because a check nobody ran is
+    indistinguishable from a check that passed.
+    """
+    return _find_tool("ildasm", ILDASM_PKG, fetch, required=False)
+
+
+def _find_tool(name: str, package: str, fetch: bool, required: bool) -> Path | None:
+    found = shutil.which(name)
     if found:
         return Path(found)
-    cached = (Path.home() / ".nuget" / "packages" / ILASM_PKG.lower() / ILASM_VER
-              / "runtimes" / RID / "native" / f"ilasm{EXE}")
+    cached = (Path.home() / ".nuget" / "packages" / package.lower() / ILASM_VER
+              / "runtimes" / RID / "native" / f"{name}{EXE}")
     if cached.exists():
         return cached
     if not fetch:
-        sys.exit(f"error: ilasm not found on PATH or at {cached}\n"
-                 f"  Re-run with --fetch-tools to restore {ILASM_PKG} {ILASM_VER} from NuGet.")
+        message = (f"{name} not found on PATH or at {cached}\n"
+                   f"  Re-run with --fetch-tools to restore {package} {ILASM_VER} from NuGet.")
+        if required:
+            sys.exit(f"error: {message}")
+        print(f"warning: {message}")
+        return None
 
-    print(f"Restoring {ILASM_PKG} {ILASM_VER} ...")
+    print(f"Restoring {package} {ILASM_VER} ...")
     with tempfile.TemporaryDirectory() as tmp:
         proj = Path(tmp) / "fetch.csproj"
         proj.write_text(
             '<Project Sdk="Microsoft.NET.Sdk">'
             '<PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>'
-            f'<ItemGroup><PackageDownload Include="{ILASM_PKG}" Version="[{ILASM_VER}]" /></ItemGroup>'
+            f'<ItemGroup><PackageDownload Include="{package}" Version="[{ILASM_VER}]" /></ItemGroup>'
             '</Project>')
         subprocess.run(["dotnet", "restore", str(proj)], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
@@ -340,18 +358,26 @@ def find_ilasm(fetch: bool) -> Path:
 
 def find_de4dot() -> list[str]:
     """The built de4dot, discovered rather than hardcoded -- the target framework moves upstream."""
-    candidates = sorted((ROOT / "Release").glob(f"net*/{RID}/de4dot.dll"))
+    candidates = list((ROOT / "Release").glob(f"net*/{RID}/de4dot.dll"))
     if not candidates:
         sys.exit(f"error: no de4dot build under {ROOT / 'Release'}/net*/{RID}/\n"
                  f"  Build it first:  dotnet build -c Release de4dot.net.slnf")
-    return ["dotnet", str(candidates[-1])]
+    # Highest framework version, compared as numbers. Sorting the paths as text picks net8.0 over
+    # net10.0, and Release/net8.0 holds the pinned constdata worker's tree rather than a current host
+    # build -- so the whole suite silently runs a de4dot that may be months old.
+    def framework(path: Path) -> tuple:
+        match = re.match(r"net(\d+)\.(\d+)$", path.parent.parent.name)
+        return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+    return ["dotnet", str(max(candidates, key=framework))]
 
 
 OUTCOME_RE = re.compile(r"relational: outcome=(\w+)")
 RESOLVED_RE = re.compile(r"XOR-switch relational: resolved (\d+) (?:edge|step)")
 
 
-def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path) -> list[str]:
+def run_fixture(exp: Expectation, ilasm: Path, ildasm: Path | None, de4dot: list[str],
+                workdir: Path) -> list[str]:
     """Returns a list of failure descriptions; empty means the fixture passed."""
     if exp.blobs is not None:
         for blob_name, blob in exp.blobs().items():
@@ -411,7 +437,7 @@ def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path)
             failures.append(f"did not expect {text!r} in de4dot's output")
 
     if exp.il_contains or exp.il_lacks:
-        full = disassemble(out, workdir, exp.name)
+        full = disassemble(out, workdir, exp.name, ildasm)
         if full is None:
             failures.append("could not disassemble the output module")
         else:
@@ -423,7 +449,7 @@ def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path)
                     failures.append(f"expected {text!r} to be gone from the output module")
 
     if exp.switch_gone is not None or exp.calls is not None or exp.body_lacks:
-        body = disassemble_run(out, workdir, exp.name)
+        body = disassemble_run(out, workdir, exp.name, ildasm)
         if body is None:
             failures.append("could not read Target::Run back out of the output")
         else:
@@ -439,24 +465,21 @@ def run_fixture(exp: Expectation, ilasm: Path, de4dot: list[str], workdir: Path)
     return failures
 
 
-def disassemble(dll: Path, workdir: Path, name: str) -> str | None:
-    """The whole output module, via ildasm if present -- otherwise IL checks are skipped, not faked."""
-    ildasm = shutil.which("ildasm") or str(
-        Path.home() / ".nuget" / "packages" / f"runtime.{RID}.microsoft.netcore.ildasm"
-        / ILASM_VER / "runtimes" / RID / "native" / f"ildasm{EXE}")
-    if not Path(ildasm).exists():
+def disassemble(dll: Path, workdir: Path, name: str, ildasm: Path | None) -> str | None:
+    """The whole output module, or None when there is no ildasm to produce it."""
+    if ildasm is None:
         return None
     dump = workdir / f"{name}-out.il"
     flag = "/" if sys.platform == "win32" else "-"
-    proc = subprocess.run([ildasm, str(dll), f"{flag}out={dump}"], capture_output=True, text=True)
+    proc = subprocess.run([str(ildasm), str(dll), f"{flag}out={dump}"], capture_output=True, text=True)
     if proc.returncode != 0 or not dump.exists():
         return None
     return dump.read_text(errors="ignore")
 
 
-def disassemble_run(dll: Path, workdir: Path, name: str) -> str | None:
+def disassemble_run(dll: Path, workdir: Path, name: str, ildasm: Path | None) -> str | None:
     """Target::Run's body alone."""
-    text = disassemble(dll, workdir, name)
+    text = disassemble(dll, workdir, name, ildasm)
     if text is None:
         return None
     match = re.search(r"\.method[^{]*?Run\(\)[^{]*?\{(.*?)\n  \}", text, re.S)
@@ -467,18 +490,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--fetch-tools", action="store_true",
-                        help="restore ilasm from NuGet if it is not already available")
+                        help="restore ilasm and ildasm from NuGet if they are not already available")
     parser.add_argument("--keep", action="store_true", help="keep the working directory")
     args = parser.parse_args()
 
     ilasm = find_ilasm(args.fetch_tools)
+    ildasm = find_ildasm(args.fetch_tools)
     de4dot = find_de4dot()
     workdir = Path(tempfile.mkdtemp(prefix="reactor-tests-"))
 
     failed = 0
     try:
         for exp in EXPECTATIONS:
-            problems = run_fixture(exp, ilasm, de4dot, workdir)
+            problems = run_fixture(exp, ilasm, ildasm, de4dot, workdir)
             if problems:
                 failed += 1
                 print(f"FAIL  {exp.name}")
