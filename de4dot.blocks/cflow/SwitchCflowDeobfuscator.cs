@@ -265,17 +265,19 @@ namespace de4dot.blocks.cflow {
 				bool isBranch = IsBranchBlock(source);
 				if (!isBranch && !IsBccBlock(source))
 					continue;
-					instructionEmulator.Initialize(blocks, allBlocks[0] == source);
-					instructionEmulator.Emulate(source.Instructions);
 
-					var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
-					if (target == null)
-						continue;
+				instructionEmulator.Initialize(blocks, allBlocks[0] == source);
+				instructionEmulator.Emulate(source.Instructions);
+
+				var target = GetSwitchTarget(switchTargets, switchFallThrough, instructionEmulator.GetLocal(switchVariable));
+				if (target == null)
+					continue;
+
 				plan.Add(isBranch
 					? SwitchRewrite.Branch(source, target)
 					: SwitchRewrite.Bcc(source, target, block));
-					}
-				}
+			}
+		}
 
 		/// <summary>Successors of <paramref name="source"/> with every edge to <paramref name="oldTarget"/> pointed at <paramref name="newTarget"/>.</summary>
 		static List<Block> SuccessorsWithBlockReplaced(Block source, Block oldTarget, Block newTarget) {
@@ -286,7 +288,7 @@ namespace de4dot.blocks.cflow {
 				foreach (var t in source.Targets) {
 					if (t != null)
 						list.Add(t == oldTarget ? newTarget : t);
-			}
+				}
 			}
 			return list;
 		}
@@ -316,37 +318,43 @@ namespace de4dot.blocks.cflow {
 			if (allBlocks.Count == 0 || overrides.Count == 0)
 				return false;
 
-			var succ = new Dictionary<Block, List<Block>>();
-			foreach (var b in allBlocks) {
-				var list = new List<Block>();
-				if (b.FallThrough != null)
-					list.Add(b.FallThrough);
-				if (b.Targets != null) {
-					foreach (var t in b.Targets)
-						if (t != null)
-							list.Add(t);
-				}
-				succ[b] = list;
-			}
-			foreach (var o in overrides)
-				succ[o.Key] = o.Value;
-
 			var seen = new HashSet<Block>();
 			var stack = new Stack<Block>();
+			var handlerEntries = new List<Block>();
 			stack.Push(allBlocks[0]);
 			while (stack.Count > 0) {
-				var b = stack.Pop();
-				if (!seen.Add(b))
+				var block = stack.Pop();
+				if (!seen.Add(block))
 					continue;
-				foreach (var instr in b.Instructions) {
-					var c = instr.OpCode.Code;
-					if (c == Code.Ret || c == Code.Throw || c == Code.Rethrow)
+				foreach (var instr in block.Instructions) {
+					var code = instr.OpCode.Code;
+					if (code == Code.Ret || code == Code.Throw || code == Code.Rethrow)
 						return false;
 				}
-				if (succ.TryGetValue(b, out var next)) {
-					foreach (var n in next)
-						stack.Push(n);
+
+				if (overrides.TryGetValue(block, out var rewritten)) {
+					foreach (var target in rewritten)
+						stack.Push(target);
 				}
+				else {
+					if (block.FallThrough != null)
+						stack.Push(block.FallThrough);
+					if (block.Targets != null) {
+						foreach (var target in block.Targets) {
+							if (target != null)
+								stack.Push(target);
+						}
+					}
+				}
+
+				// Reaching a protected block makes its handlers reachable. Handler blocks are not in
+				// allBlocks and nothing branches into them, so without this a `throw` that lives only
+				// in a catch is invisible here and the rewrite gets refused on a method that exits
+				// perfectly well.
+				handlerEntries.Clear();
+				ScopeBlock.AddProtectingHandlerEntryBlocks(block, handlerEntries);
+				foreach (var entry in handlerEntries)
+					stack.Push(entry);
 			}
 			return true;
 		}
@@ -369,7 +377,7 @@ namespace de4dot.blocks.cflow {
 				}
 				else
 					plan.Add(SwitchRewrite.BranchWithPop(source, target));
-				}
+			}
 		}
 
 		//		ldloc N

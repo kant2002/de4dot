@@ -96,26 +96,61 @@ namespace de4dot.blocks.cflow {
 		const int MaxTrackedLocals = 16;
 
 		/// <summary>An abstract evaluation stack/local slot: a known int32, or unknown.</summary>
-		readonly struct Slot {
+		readonly struct Slot : IEquatable<Slot> {
 			public readonly int Value;
 			public readonly bool Known;
 			Slot(int value, bool known) { Value = value; Known = known; }
 			public static readonly Slot Unknown = new Slot(0, false);
 			public static Slot Of(int value) => new Slot(value, true);
+			public bool Equals(Slot other) => Known == other.Known && (!Known || Value == other.Value);
+			public override bool Equals(object? obj) => obj is Slot other && Equals(other);
+			public override int GetHashCode() => Known ? Value : -1;
 			public override string ToString() => Known ? Value.ToString() : "?";
 		}
 
-		sealed class Configuration {
+		/// <summary>
+		///     A point in the exploration: which block, with what abstract stack and locals.
+		///
+		///     Compared by value, and by block identity rather than by the block's hash. An earlier
+		///     version keyed the visited set on a string built from <c>Block.GetHashCode()</c>, which
+		///     silently merged two genuinely different configurations whenever two blocks collided —
+		///     dropping part of the reachable set. The set being complete is the entire basis for a
+		///     <see cref="StateMachineVerdict.Loops"/> verdict, so it must not depend on hash luck.
+		/// </summary>
+		sealed class Configuration : IEquatable<Configuration> {
 			public readonly Block Block;
 			public readonly Slot[] Stack;
 			public readonly Slot[] Locals;
-			public readonly string Key;
 
 			public Configuration(Block block, Slot[] stack, Slot[] locals) {
 				Block = block;
 				Stack = stack;
 				Locals = locals;
-				Key = block.GetHashCode() + "|" + string.Join(",", stack) + "|" + string.Join(",", locals);
+			}
+
+			public bool Equals(Configuration? other) =>
+				other != null && ReferenceEquals(Block, other.Block) &&
+				SlotsEqual(Stack, other.Stack) && SlotsEqual(Locals, other.Locals);
+
+			public override bool Equals(object? obj) => Equals(obj as Configuration);
+
+			public override int GetHashCode() {
+				int hash = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(Block);
+				foreach (var slot in Stack)
+					hash = hash * 31 + slot.GetHashCode();
+				foreach (var slot in Locals)
+					hash = hash * 31 + slot.GetHashCode();
+				return hash;
+			}
+
+			static bool SlotsEqual(Slot[] a, Slot[] b) {
+				if (a.Length != b.Length)
+					return false;
+				for (int i = 0; i < a.Length; i++) {
+					if (!a[i].Equals(b[i]))
+						return false;
+				}
+				return true;
 			}
 		}
 
@@ -132,14 +167,31 @@ namespace de4dot.blocks.cflow {
 			if (localCount > MaxTrackedLocals)
 				localCount = MaxTrackedLocals;
 
-			var seen = new HashSet<string>();
+			var seen = new HashSet<Configuration>();
 			var work = new Stack<Configuration>();
 			void Schedule(Block block, Slot[] stack, Slot[] locals) {
 				if (block is null || stack.Length > MaxStackDepth)
 					return;
 				var config = new Configuration(block, stack, locals);
-				if (seen.Add(config.Key))
+				if (seen.Add(config))
 					work.Push(config);
+			}
+
+			// Entering a protected region makes its handlers reachable. Handlers are not part of the
+			// GetAllBlocks() walk and no branch may transfer into one, so without scheduling them a
+			// method whose only `ret`/`throw` sits in a catch or finally looks like it can never exit
+			// -- and this would answer Loops, which the caller acts on by discarding a good rewrite.
+			var handlerEntries = new List<Block>();
+			void ScheduleProtectingHandlers(Block block) {
+				handlerEntries.Clear();
+				ScopeBlock.AddProtectingHandlerEntryBlocks(block, handlerEntries);
+				foreach (var entry in handlerEntries) {
+					// Entered with an empty abstract stack and no assumption about the locals: an
+					// exception can be raised at any point in the protected region. Under-deep is the
+					// safe direction here, because ValueStack.Pop on an empty stack yields an unknown
+					// rather than throwing, so every read widens instead of inventing a value.
+					Schedule(entry, new Slot[0], AllUnknown(localCount));
+				}
 			}
 
 			var noLocals = new Slot[localCount];
@@ -174,6 +226,8 @@ namespace de4dot.blocks.cflow {
 					result.Verdict = StateMachineVerdict.ExitReachable;
 					return result;
 				}
+
+				ScheduleProtectingHandlers(config.Block);
 
 				bool endsInSwitch = end > 0 && instrs[end - 1].OpCode.Code == Code.Switch;
 				bool endsInBranch = end > 0 && (instrs[end - 1].IsBr() || instrs[end - 1].IsConditionalBranch());
