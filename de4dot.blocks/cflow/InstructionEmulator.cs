@@ -510,13 +510,13 @@ namespace de4dot.blocks.cflow {
 			}
 		}
 
+		// Only types whose size is fixed by the spec, independent of the runtime and the process
+		// bitness the obfuscated assembly will actually run under; -1 for everything else.
+		// IntPtr/UIntPtr, object references and non-primitive value types are deliberately absent:
+		// guessing a size for those would let the emulator report a constant real execution can
+		// contradict, and a wrong constant here silently picks the wrong switch arm downstream.
+		// System.Guid is included because its layout is part of its documented contract.
 		void Emulate_Sizeof(Instruction instr) {
-			// Only types whose size is fixed by the spec, independent of the runtime and the process
-			// bitness the obfuscated assembly will actually run under; -1 for everything else.
-			// IntPtr/UIntPtr, object references and non-primitive value types are deliberately absent:
-			// guessing a size for those would let the emulator report a constant real execution can
-			// contradict, and a wrong constant here silently picks the wrong switch arm downstream.
-			// System.Guid is included because its layout is part of its documented contract.
 			int size = -1;
 			if (instr.Operand is ITypeDefOrRef tdr) {
 				size = tdr.FullName switch {
