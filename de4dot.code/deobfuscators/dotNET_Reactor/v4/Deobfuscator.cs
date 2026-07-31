@@ -746,9 +746,24 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			FixEntryPoint();
 			CleanDisplayClasses();
 			FixFakeInstanceStubs();
+			RemoveOpaquePredicates();
 			VerifyStateMachines();
 
 			base.DeobfuscateEnd();
+		}
+
+		/// <summary>
+		///     Drop the dead opaque-predicate pairs Reactor injects into most types. See
+		///     <see cref="OpaquePredicateRemover" /> for the shape and for why removal is gated as
+		///     tightly as it is.
+		/// </summary>
+		void RemoveOpaquePredicates() {
+			var remover = new OpaquePredicateRemover(module, GetMethodsToRemove());
+			remover.Find();
+			if (remover.Count == 0)
+				return;
+			AddFieldsToBeRemoved(remover.Fields, "Opaque predicate backing field");
+			AddMethodsToBeRemoved(remover.Predicates, "Opaque predicate");
 		}
 
 		/// <summary>

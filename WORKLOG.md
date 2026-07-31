@@ -85,6 +85,12 @@ Run order and each gate's blind spot: ROADMAP §4.
   of that set is not a defect count. The `goto` rise is two methods (`SetupRef`, `ConnectRequest`),
   both keeping every call target, so no payload was lost; `while (true)` fell 52 → 49. ROADMAP §7a.
 
+- [x] **19.** Remove Reactor's dead opaque-predicate pairs — **DONE.** `OpaquePredicateRemover`, gated
+  on the field never being written and every reader going away too. Drops 47/47/54 field+method pairs
+  across S1/S2/S3 with no other measurement moving; gates 1/5/6/7 pass. The trap it cost a rewrite to
+  find: removal is queued, not immediate, so readers must be checked against `GetMethodsToRemove()`.
+  Bisect lever `DE4DOT_NO_OPAQUE_PREDICATES=1`. ROADMAP §7b.
+
 ## Open
 
 - [ ] **17.** Make phase 3's seed fallback sound. Attribution is fixed — the per-case BFS no longer

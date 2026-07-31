@@ -1297,6 +1297,56 @@ Queued as WORKLOG #16.
 
 ---
 
+## 7b. Dead opaque predicates, and why removing them needs the removal queue
+
+Reactor injects into most types a static field whose type is the declaring type itself and which
+nothing ever assigns, paired with a parameterless static bool whose entire body is
+`return thatField == null;`. Nothing assigns the field, so the predicate is a constant `true`. Both
+members are scaffolding: individually well-formed, so every other pass leaves them alone, and present
+in the obfuscated input rather than introduced here — the field is visible in the original metadata
+before any pass runs.
+
+They are worth removing because they are not rare. Across the corpus the shape accounts for 47
+field/method pairs in S1, 47 in S2 and 54 in S3 — a tenth of every member that survives to the
+output, all of it noise in anything that reads or measures the result.
+
+`OpaquePredicateRemover` drops a pair only when the field is never written, never has its address
+taken and is never handed to `ldtoken`, and every method that reads it is itself going away. The
+constraint that matters is the last one, and it is the one that made a first attempt find *nothing*:
+
+> **`AddMethodToBeRemoved` only queues.** Deletion happens in `base.DeobfuscateEnd()`, so at the
+> point this pass runs, every method earlier passes decided to remove is still in the module — and
+> Reactor's other injected methods read these same fields. Counting readers without subtracting the
+> already-queued set rejected all 101 candidates in S2 with the honest-looking reason "read
+> elsewhere". A pass that runs inside `DeobfuscateEnd` and reasons about whether something is
+> referenced must consult `GetMethodsToRemove()`, or it is reasoning about a module state that will
+> not exist by the time it is written out.
+
+Measured with the pass as the only variable (`DE4DOT_NO_OPAQUE_PREDICATES=1` is the bisect lever):
+S2 loses 286 decompiled lines, 47 methods and 47 fields, and every other measurement is unchanged —
+dispatch sites, non-terminating and undecidable machines, `goto` count, unresolved references and
+residual decryption call sites all identical. Gates 1, 5, 6 and 7 pass on all three samples, with
+gate 1 target-internal at 0.
+
+### Remaining headroom
+
+The pass is conservative by construction, and 58 pairs across the corpus still reach the output
+looking dead when judged from the decompiled result alone (11 in S1, 10 in S2, 37 in S3). That gap is
+not a defect: after-the-fact analysis sees only the final module, while the pass sees a mid-pipeline
+one in which other injected methods still read these fields, and it refuses whenever a reader's fate
+is not already settled. Closing the gap means proving those readers dead, not loosening the rule
+below — do not treat the number as a target.
+
+### The one thing this pass must never become
+
+The shape is cheap to imitate. A real lazily-initialised singleton is the same field and nearly the
+same predicate, differing only in having a store somewhere. Every relaxation of the write check
+therefore trades directly against correctness, and the write check is deliberately crude — anything
+that is not a plain load counts as a write. Widening the *shape* it recognises is safe; widening what
+counts as "not written" is not.
+
+---
+
 ## 8. History: the net8.0 pin and the extraction worker
 
 Closed, but the invariant at the end of this section is live.
