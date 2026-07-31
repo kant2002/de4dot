@@ -367,12 +367,18 @@ namespace de4dot.blocks.cflow {
 			case Code.Conv_Ovf_U8_Un:	Emulate_Conv_Ovf_U8_Un(instr); break;
 
 			case Code.Ldelem_I1 or Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem_I4: Emulate_Ldelem_I4(instr); break;
+			case Code.Ldelem_I4 or Code.Ldelem_U4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem_I8: valueStack.Pop(2); valueStack.Push(Int64Value.CreateUnknown()); break;
 			case Code.Ldelem_U1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt8()); break;
 			case Code.Ldelem_U2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt16()); break;
-			case Code.Ldelem_U4: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem:	 valueStack.Pop(2); valueStack.Push(GetUnknownValue(instr.Operand as ITypeDefOrRef)); break;
+			case Code.Ldelem:
+				if (IsInt32ElementType(instr.Operand as ITypeDefOrRef))
+					Emulate_Ldelem_I4(instr);
+				else {
+					valueStack.Pop(2);
+					valueStack.Push(GetUnknownValue(instr.Operand as ITypeDefOrRef));
+				}
+				break;
 
 			case Code.Ldind_I1:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
 			case Code.Ldind_I2:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
@@ -447,12 +453,25 @@ namespace de4dot.blocks.cflow {
 			valueStack.Push(Int32Value.CreateUnknown());
 		}
 
+		// Element tracking is confined to arrays of 4-byte integers. Those are the only ones whose
+		// elements stelem/ldelem below can round-trip without truncating, and confining it keeps the
+		// invariant that every slot of a tracked array holds an Int32Value.
+		const int MaxTrackedArrayLength = 4096;
+
+		static bool IsInt32ElementType(ITypeDefOrRef? type) =>
+			type?.FullName is "System.Int32" or "System.UInt32";
+
 		void Emulate_Newarr(Instruction instr) {
 			var val = valueStack.Pop();
-			if (val is Int32Value arrSize && arrSize.AllBitsValid() && arrSize.Value is >= 0 and <= 4096) {
+			if (val is Int32Value arrSize && arrSize.AllBitsValid() &&
+				arrSize.Value is >= 0 and <= MaxTrackedArrayLength &&
+				IsInt32ElementType(instr.Operand as ITypeDefOrRef)) {
+				// newarr zero-initializes, so an element nothing has written to really is 0. That
+				// only stays true as long as every store is either modelled or invalidates the
+				// array -- see Emulate_Stelem.
 				var arr = new List<Value>(arrSize.Value);
 				for (int i = 0; i < arrSize.Value; i++)
-					arr.Add(new UnknownValue());
+					arr.Add(Int32Value.Zero);
 				valueStack.Push(new TrackedArrayValue(arr));
 			}
 			else {
@@ -464,19 +483,34 @@ namespace de4dot.blocks.cflow {
 			var val = valueStack.Pop();
 			var idxValue = valueStack.Pop();
 			var obj = valueStack.Pop();
-			if (val is Int32Value &&
-				idxValue is Int32Value idx && idx.AllBitsValid() &&
-				obj is ObjectValue { obj: List<Value> arr } && idx.Value >= 0 && arr.Count > idx.Value) {
+			if (obj is not TrackedArrayValue tracked)
+				return;
+			var arr = tracked.Elements;
+
+			bool storesInt32 = instr.OpCode.Code == Code.Stelem_I4 ||
+				(instr.OpCode.Code == Code.Stelem && IsInt32ElementType(instr.Operand as ITypeDefOrRef));
+			if (storesInt32 && val is Int32Value &&
+				idxValue is Int32Value idx && idx.AllBitsValid() && (uint)idx.Value < (uint)arr.Count) {
 				arr[idx.Value] = val;
+				return;
 			}
+
+			// A store that cannot be placed has to invalidate the whole array rather than be
+			// skipped. Skipping it leaves the earlier element values standing and they are then
+			// read back as facts, so an unknown index -- or a value this emulator did not model --
+			// would let ldelem hand out a constant the real code never stores there. That constant
+			// goes on to pick a switch target in SwitchCflowDeobfuscator, which is how a silently
+			// wrong emulation turns into a method rewritten to branch the wrong way.
+			for (int i = 0; i < arr.Count; i++)
+				arr[i] = Int32Value.CreateUnknown();
 		}
 
 		void Emulate_Ldelem_I4(Instruction instr) {
 			var idxValue = valueStack.Pop();
 			var obj = valueStack.Pop();
-			if (idxValue is Int32Value idx && idx.AllBitsValid() &&
-				obj is ObjectValue { obj: List<Value> arr } && idx.Value >= 0 && arr.Count > idx.Value) {
-				valueStack.Push(arr[idx.Value]);
+			if (obj is TrackedArrayValue tracked &&
+				idxValue is Int32Value idx && idx.AllBitsValid() && (uint)idx.Value < (uint)tracked.Elements.Count) {
+				valueStack.Push(tracked.Elements[idx.Value]);
 			}
 			else {
 				valueStack.Push(Int32Value.CreateUnknown());

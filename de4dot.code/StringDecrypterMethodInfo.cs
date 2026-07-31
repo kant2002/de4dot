@@ -19,12 +19,15 @@
 
 namespace de4dot.code {
 	/// <summary>
-	/// Identifies a string decrypter method by its metadata token.
+	///     Identifies a string decrypter method a deobfuscator has found.
+	///
+	///     Deobfuscators used to report these as bare metadata tokens. The token is still the
+	///     identity; the type exists so that one which needs to say more about a decrypter than
+	///     where it lives has somewhere to say it, rather than a second collection keyed by token
+	///     that every caller has to remember to keep in step.
 	/// </summary>
 	public sealed class StringDecrypterMethodInfo {
-		public StringDecrypterMethodInfo(int methodToken) {
-			MethodToken = methodToken;
-		}
+		public StringDecrypterMethodInfo(int methodToken) => MethodToken = methodToken;
 
 		public int MethodToken { get; }
 	}
