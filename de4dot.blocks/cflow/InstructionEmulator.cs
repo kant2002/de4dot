@@ -385,7 +385,7 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldind_U4:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
 
 			case Code.Ldlen:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Sizeof:	Emulate_Sizeof(instr); break;
+			case Code.Sizeof:	valueStack.Push(Int32Value.CreateUnknown()); break;
 
 			case Code.Ldfld:	Emulate_Ldfld(instr); break;
 			case Code.Ldsfld:	Emulate_Ldsfld(instr); break;
@@ -508,24 +508,6 @@ namespace de4dot.blocks.cflow {
 				valueStack.Pop(pops);
 				valueStack.Push(pushes);
 			}
-		}
-
-		void Emulate_Sizeof(Instruction instr) {
-			if (instr.Operand is ITypeDefOrRef tdr) {
-				switch (tdr.FullName) {
-				case "System.Byte":		valueStack.Push(new Int32Value(sizeof(byte))); return;
-				case "System.Int16":	valueStack.Push(new Int32Value(sizeof(short))); return;
-				case "System.Int32":	valueStack.Push(new Int32Value(sizeof(int))); return;
-				case "System.Int64":	valueStack.Push(new Int32Value(sizeof(long))); return;
-				case "System.UInt16":	valueStack.Push(new Int32Value(sizeof(ushort))); return;
-				case "System.UInt32":	valueStack.Push(new Int32Value(sizeof(uint))); return;
-				case "System.UInt64":	valueStack.Push(new Int32Value(sizeof(ulong))); return;
-				case "System.Single":	valueStack.Push(new Int32Value(sizeof(float))); return;
-				case "System.Double":	valueStack.Push(new Int32Value(sizeof(double))); return;
-				case "System.Guid":		valueStack.Push(new Int32Value(16)); return;
-				}
-			}
-			valueStack.Push(Int32Value.CreateUnknown());
 		}
 
 		void Emulate_Conv_U1(Instruction instr) {
