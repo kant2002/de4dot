@@ -19,7 +19,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using de4dot.code.AssemblyClient;
@@ -45,7 +44,8 @@ namespace de4dot.code {
 				var block = callResult.block;
 				int num = callResult.callEndIndex - callResult.callStartIndex + 1;
 
-				if (callResult.returnValue is not string decryptedString)
+				var decryptedString = callResult.returnValue as string;
+				if (decryptedString == null)
 					continue;
 
 				int ldstrIndex = callResult.callStartIndex;
@@ -127,8 +127,8 @@ namespace de4dot.code {
 
 		protected override void InlineAllCalls() {
 			var sortedCalls = new Dictionary<int, List<MyCallResult>>();
-			foreach (var callResult in callResults.Cast<MyCallResult>())
-			{
+			foreach (var tmp in callResults) {
+				var callResult = (MyCallResult)tmp;
 				if (!sortedCalls.TryGetValue(callResult.methodId, out var list))
 					sortedCalls[callResult.methodId] = list = new List<MyCallResult>(callResults.Count);
 				list.Add(callResult);
@@ -168,7 +168,7 @@ namespace de4dot.code {
 		}
 
 		public void Add(MethodDef method, Func<MethodDef, MethodSpec, object[], string> handler) {
-			if (method is not null)
+			if (method != null)
 				stringDecrypters.Add(method, handler);
 		}
 
