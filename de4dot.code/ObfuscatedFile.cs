@@ -499,8 +499,8 @@ namespace de4dot.code {
 				foreach (var method in type.Methods) {
 					if (!method.IsStatic)
 						continue;
-					var ret = method.MethodSig.GetRetType();
-					if (ret.ElementType != ElementType.String && ret.ElementType != ElementType.Object)
+					var ret = method.MethodSig?.GetRetType();
+					if (ret == null || (ret.ElementType != ElementType.String && ret.ElementType != ElementType.Object))
 						continue;
 					if (methodName != null && methodName != method.Name)
 						continue;
