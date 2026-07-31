@@ -55,14 +55,15 @@ namespace de4dot.blocks.cflow {
 				prev_method = method;
 
 				cached_args.Clear();
-				for (int i = 0; i < parameterDefs.Count; i++)
-					cached_args.Add(GetUnknownValue(parameterDefs[i].Type));
+				foreach (var paramDef in parameterDefs)
+					cached_args.Add(GetUnknownValue(paramDef.Type));
 
 				cached_locals.Clear();
 				cached_zeroed_locals.Clear();
-				for (int i = 0; i < localDefs.Count; i++) {
-					cached_locals.Add(GetUnknownValue(localDefs[i].Type));
-					cached_zeroed_locals.Add(GetDefaultValue(localDefs[i].Type));
+				foreach (var localDef in localDefs)
+				{
+					cached_locals.Add(GetUnknownValue(localDef.Type));
+					cached_zeroed_locals.Add(GetDefaultValue(localDef.Type));
 				}
 			}
 
@@ -78,18 +79,16 @@ namespace de4dot.blocks.cflow {
 		static Value GetUnknownValue(TypeSig? type) {
 			if (type == null)
 				return new UnknownValue();
-			switch (type.ElementType) {
-			case ElementType.Boolean: return Int32Value.CreateUnknownBool();
-			case ElementType.I1: return Int32Value.CreateUnknown();
-			case ElementType.U1: return Int32Value.CreateUnknownUInt8();
-			case ElementType.I2: return Int32Value.CreateUnknown();
-			case ElementType.U2: return Int32Value.CreateUnknownUInt16();
-			case ElementType.I4: return Int32Value.CreateUnknown();
-			case ElementType.U4: return Int32Value.CreateUnknown();
-			case ElementType.I8: return Int64Value.CreateUnknown();
-			case ElementType.U8: return Int64Value.CreateUnknown();
-			}
-			return new UnknownValue();
+			return type.ElementType switch {
+				ElementType.Boolean => Int32Value.CreateUnknownBool(),
+				ElementType.I1 => Int32Value.CreateUnknown(),
+				ElementType.U1 => Int32Value.CreateUnknownUInt8(),
+				ElementType.I2 => Int32Value.CreateUnknown(),
+				ElementType.U2 => Int32Value.CreateUnknownUInt16(),
+				ElementType.I4 or ElementType.U4 => Int32Value.CreateUnknown(),
+				ElementType.I8 or ElementType.U8 => Int64Value.CreateUnknown(),
+				_ => new UnknownValue()
+			};
 		}
 
 		static Value GetDefaultValue(TypeSig type) {
@@ -367,9 +366,8 @@ namespace de4dot.blocks.cflow {
 			case Code.Conv_Ovf_U8:		Emulate_Conv_Ovf_U8(instr); break;
 			case Code.Conv_Ovf_U8_Un:	Emulate_Conv_Ovf_U8_Un(instr); break;
 
-			case Code.Ldelem_I1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Ldelem_I4: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Ldelem_I1 or Code.Ldelem_I2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Ldelem_I4: Emulate_Ldelem_I4(instr); break;
 			case Code.Ldelem_I8: valueStack.Pop(2); valueStack.Push(Int64Value.CreateUnknown()); break;
 			case Code.Ldelem_U1: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt8()); break;
 			case Code.Ldelem_U2: valueStack.Pop(2); valueStack.Push(Int32Value.CreateUnknownUInt16()); break;
@@ -385,7 +383,7 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldind_U4:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
 
 			case Code.Ldlen:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Sizeof:	valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Sizeof:	Emulate_Sizeof(instr); break;
 
 			case Code.Ldfld:	Emulate_Ldfld(instr); break;
 			case Code.Ldsfld:	Emulate_Ldsfld(instr); break;
@@ -396,79 +394,10 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldvirtftn:valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 			case Code.Ldflda:	valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 
-			case Code.Unbox:
+			case Code.Newarr:	Emulate_Newarr(instr); break;
+			case Code.Nop:		break;
+			case Code.Pop:		valueStack.Pop(); break;
 
-			case Code.Conv_R_Un:Emulate_Conv_R_Un(instr); break;
-			case Code.Conv_R4:	Emulate_Conv_R4(instr); break;
-			case Code.Conv_R8:	Emulate_Conv_R8(instr); break;
-
-			case Code.Arglist:
-			case Code.Beq:
-			case Code.Beq_S:
-			case Code.Bge:
-			case Code.Bge_S:
-			case Code.Bge_Un:
-			case Code.Bge_Un_S:
-			case Code.Bgt:
-			case Code.Bgt_S:
-			case Code.Bgt_Un:
-			case Code.Bgt_Un_S:
-			case Code.Ble:
-			case Code.Ble_S:
-			case Code.Ble_Un:
-			case Code.Ble_Un_S:
-			case Code.Blt:
-			case Code.Blt_S:
-			case Code.Blt_Un:
-			case Code.Blt_Un_S:
-			case Code.Bne_Un:
-			case Code.Bne_Un_S:
-			case Code.Brfalse:
-			case Code.Brfalse_S:
-			case Code.Brtrue:
-			case Code.Brtrue_S:
-			case Code.Br:
-			case Code.Br_S:
-			case Code.Break:
-			case Code.Calli:
-			case Code.Ckfinite:
-			case Code.Constrained:
-			case Code.Conv_I:
-			case Code.Conv_Ovf_I:
-			case Code.Conv_Ovf_I_Un:
-			case Code.Conv_Ovf_U:
-			case Code.Conv_Ovf_U_Un:
-			case Code.Conv_U:
-			case Code.Cpblk:
-			case Code.Cpobj:
-			case Code.Endfilter:
-			case Code.Endfinally:
-			case Code.Initblk:
-			case Code.Initobj:
-			case Code.Jmp:
-			case Code.Ldelema:
-			case Code.Ldelem_I:
-			case Code.Ldelem_R4:
-			case Code.Ldelem_R8:
-			case Code.Ldelem_Ref:
-			case Code.Ldind_I:
-			case Code.Ldind_R4:
-			case Code.Ldind_R8:
-			case Code.Ldind_Ref:
-			case Code.Ldobj:
-			case Code.Leave:
-			case Code.Leave_S:
-			case Code.Localloc:
-			case Code.Mkrefany:
-			case Code.Newarr:
-			case Code.Newobj:
-			case Code.Nop:
-			case Code.Pop:
-			case Code.Readonly:
-			case Code.Refanytype:
-			case Code.Refanyval:
-			case Code.Ret:
-			case Code.Rethrow:
 			case Code.Stelem:
 			case Code.Stelem_I:
 			case Code.Stelem_I1:
@@ -478,22 +407,12 @@ namespace de4dot.blocks.cflow {
 			case Code.Stelem_R4:
 			case Code.Stelem_R8:
 			case Code.Stelem_Ref:
-			case Code.Stfld:
-			case Code.Stind_I:
-			case Code.Stind_I1:
-			case Code.Stind_I2:
-			case Code.Stind_I4:
-			case Code.Stind_I8:
-			case Code.Stind_R4:
-			case Code.Stind_R8:
-			case Code.Stind_Ref:
-			case Code.Stobj:
-			case Code.Stsfld:
-			case Code.Switch:
-			case Code.Tailcall:
-			case Code.Throw:
-			case Code.Unaligned:
-			case Code.Volatile:
+				Emulate_Stelem(instr); break;
+
+			case Code.Conv_R_Un:Emulate_Conv_R_Un(instr); break;
+			case Code.Conv_R4:	Emulate_Conv_R4(instr); break;
+			case Code.Conv_R8:	Emulate_Conv_R8(instr); break;
+
 			default:
 				UpdateStack(instr);
 				break;
@@ -507,6 +426,60 @@ namespace de4dot.blocks.cflow {
 			else {
 				valueStack.Pop(pops);
 				valueStack.Push(pushes);
+			}
+		}
+
+		void Emulate_Sizeof(Instruction instr) {
+			if (instr.Operand is ITypeDefOrRef tdr) {
+				switch (tdr.FullName) {
+				case "System.Byte":		valueStack.Push(new Int32Value(sizeof(byte))); return;
+				case "System.Int16":	valueStack.Push(new Int32Value(sizeof(short))); return;
+				case "System.Int32":	valueStack.Push(new Int32Value(sizeof(int))); return;
+				case "System.Int64":	valueStack.Push(new Int32Value(sizeof(long))); return;
+				case "System.UInt16":	valueStack.Push(new Int32Value(sizeof(ushort))); return;
+				case "System.UInt32":	valueStack.Push(new Int32Value(sizeof(uint))); return;
+				case "System.UInt64":	valueStack.Push(new Int32Value(sizeof(ulong))); return;
+				case "System.Single":	valueStack.Push(new Int32Value(sizeof(float))); return;
+				case "System.Double":	valueStack.Push(new Int32Value(sizeof(double))); return;
+				case "System.Guid":		valueStack.Push(new Int32Value(16)); return;
+				}
+			}
+			valueStack.Push(Int32Value.CreateUnknown());
+		}
+
+		void Emulate_Newarr(Instruction instr) {
+			var val = valueStack.Pop();
+			if (val is Int32Value arrSize && arrSize.AllBitsValid() && arrSize.Value is >= 0 and <= 4096) {
+				var arr = new List<Value>(arrSize.Value);
+				for (int i = 0; i < arrSize.Value; i++)
+					arr.Add(new UnknownValue());
+				valueStack.Push(new TrackedArrayValue(arr));
+			}
+			else {
+				valueStack.Push(new UnknownValue());
+			}
+		}
+
+		void Emulate_Stelem(Instruction instr) {
+			var val = valueStack.Pop();
+			var idxValue = valueStack.Pop();
+			var obj = valueStack.Pop();
+			if (val is Int32Value &&
+				idxValue is Int32Value idx && idx.AllBitsValid() &&
+				obj is ObjectValue { obj: List<Value> arr } && idx.Value >= 0 && arr.Count > idx.Value) {
+				arr[idx.Value] = val;
+			}
+		}
+
+		void Emulate_Ldelem_I4(Instruction instr) {
+			var idxValue = valueStack.Pop();
+			var obj = valueStack.Pop();
+			if (idxValue is Int32Value idx && idx.AllBitsValid() &&
+				obj is ObjectValue { obj: List<Value> arr } && idx.Value >= 0 && arr.Count > idx.Value) {
+				valueStack.Push(arr[idx.Value]);
+			}
+			else {
+				valueStack.Push(Int32Value.CreateUnknown());
 			}
 		}
 

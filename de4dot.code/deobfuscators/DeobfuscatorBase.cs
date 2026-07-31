@@ -19,12 +19,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using dnlib.DotNet.Writer;
 using dnlib.PE;
 using de4dot.blocks;
 using de4dot.blocks.cflow;
+using de4dot.code;
 
 namespace de4dot.code.deobfuscators {
 	public abstract class DeobfuscatorBase : IDeobfuscator, IModuleWriterListener {
@@ -241,6 +243,10 @@ namespace de4dot.code.deobfuscators {
 		}
 
 		public abstract IEnumerable<int> GetStringDecrypterMethods();
+
+		public virtual IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos() {
+			return GetStringDecrypterMethods().Select(token => new StringDecrypterMethodInfo(token));
+		}
 
 		class MethodCallRemover {
 			Dictionary<string, MethodDefAndDeclaringTypeDict<bool>> methodNameInfos = new Dictionary<string, MethodDefAndDeclaringTypeDict<bool>>();

@@ -345,6 +345,13 @@ namespace de4dot.blocks.cflow {
 			}
 			if ((ReferenceEquals(a, b) && a.IsNonZero()) || b.HasValue(1))
 				return Zero;
+			// Power-of-two modulus: (uint)a % (uint)b == (uint)a & (uint)(b - 1)
+			// And() propagates partial bit-validity correctly.
+			if (b.AllBitsValid()) {
+				uint bu = (uint)b.Value;
+				if (bu != 0 && (bu & (bu - 1)) == 0)
+					return And(a, new Int32Value((int)(bu - 1)));
+			}
 			return CreateUnknown();
 		}
 
@@ -448,10 +455,13 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shl(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			// Out-of-range counts (incl. nonzero multiples of 32) are undefined in CIL and would
+			// fabricate an all-bits-valid mask below (C# masks the count, turning `32 - shift`
+			// into 0). Stay conservative, matching pre-refactor behavior.
+			if ((uint)b.Value >= sizeof(int) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(int) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			uint validMask = (a.ValidMask << shift) | (uint.MaxValue >> (sizeof(int) * 8 - shift));
 			return new Int32Value(a.Value << shift, validMask);
@@ -460,10 +470,10 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shr(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(int) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(int) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			uint validMask = a.ValidMask >> shift;
 			if (a.IsBitValid(sizeof(int) * 8 - 1))
@@ -474,10 +484,10 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shr_Un(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(int) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(int) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			uint validMask = (a.ValidMask >> shift) | (uint.MaxValue << (sizeof(int) * 8 - shift));
 			return new Int32Value((int)((uint)a.Value >> shift), validMask);

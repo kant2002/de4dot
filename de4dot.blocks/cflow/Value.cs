@@ -17,6 +17,8 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System.Collections.Generic;
+
 namespace de4dot.blocks.cflow {
 	public enum ValueType : byte {
 		Unknown,
@@ -57,7 +59,19 @@ namespace de4dot.blocks.cflow {
 		public readonly object? obj;	// can be null but that doesn't mean that this ObjectValue instance is null
 		public ObjectValue() : this(null) { }
 		public ObjectValue(object? obj) : base(ValueType.Object) => this.obj = obj;
+		protected ObjectValue(object? obj, ValueType vt) : base(vt) => this.obj = obj;
 		public override string ToString() => "<non-null object>";
+	}
+
+	/// <summary>
+	///     Tracked array created by newarr. Reports as Unknown (not Object) so that
+	///     brfalse/brtrue don't resolve branches based on it, but carries the backing
+	///     List&lt;Value&gt; so stelem.i4/ldelem.i4 can track element values.
+	/// </summary>
+	public class TrackedArrayValue : ObjectValue {
+		public TrackedArrayValue(List<Value> arr)
+			: base(arr, ValueType.Unknown) { }
+		public override string ToString() => "<tracked array>";
 	}
 
 	public class NullValue : Value {

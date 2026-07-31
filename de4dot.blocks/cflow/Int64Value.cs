@@ -391,10 +391,10 @@ namespace de4dot.blocks.cflow {
 		public static Int64Value Shl(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(long) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			ulong validMask = (a.ValidMask << shift) | (ulong.MaxValue >> (sizeof(long) * 8 - shift));
 			return new Int64Value(a.Value << shift, validMask);
@@ -403,10 +403,10 @@ namespace de4dot.blocks.cflow {
 		public static Int64Value Shr(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(long) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			ulong validMask = a.ValidMask >> shift;
 			if (a.IsBitValid(sizeof(long) * 8 - 1))
@@ -417,10 +417,10 @@ namespace de4dot.blocks.cflow {
 		public static Int64Value Shr_Un(Int64Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
+			if ((uint)b.Value >= sizeof(long) * 8)
+				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			if (b.Value < 0 || b.Value >= sizeof(long) * 8)
-				return CreateUnknown();
 			int shift = b.Value;
 			ulong validMask = (a.ValidMask >> shift) | (ulong.MaxValue << (sizeof(long) * 8 - shift));
 			return new Int64Value((long)((ulong)a.Value >> shift), validMask);

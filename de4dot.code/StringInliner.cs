@@ -26,6 +26,19 @@ using de4dot.blocks;
 
 namespace de4dot.code {
 	public abstract class StringInlinerBase : MethodReturnValueInliner {
+		/// <summary>
+		/// Checks whether a MethodSpec is a generic instantiation with a single type argument
+		/// of System.String (i.e., Method&lt;string&gt;). Used to match .NET Reactor v6.x generic
+		/// decrypter calls like !!0 DecryptMethod&lt;string&gt;(int32).
+		/// </summary>
+		protected static bool IsGenericStringInstantiation(MethodSpec gim) {
+			var gims = gim?.GenericInstMethodSig;
+			if (gims is null || gims.GenericArguments.Count != 1)
+				return false;
+			var ga = gims.GenericArguments[0];
+			return ga is { ElementType: ElementType.String };
+		}
+
 		protected override void InlineReturnValues(IList<CallResult> callResults) {
 			foreach (var callResult in callResults) {
 				var block = callResult.block;
@@ -38,14 +51,17 @@ namespace de4dot.code {
 				int ldstrIndex = callResult.callStartIndex;
 				block.Replace(ldstrIndex, num, OpCodes.Ldstr.ToInstruction(decryptedString));
 
-				// If it's followed by castclass string, remove it
+				// .NET Reactor sometimes emits castclass [mscorlib]System.String after
+				// the generic decrypter call (since the return type is !!0, not string).
+				// Remove it since we've already inlined the ldstr.
 				if (ldstrIndex + 1 < block.Instructions.Count) {
 					var instr = block.Instructions[ldstrIndex + 1];
 					if (instr.OpCode.Code == Code.Castclass && instr.Operand.ToString() == "System.String")
 						block.Remove(ldstrIndex + 1, 1);
 				}
 
-				// If it's followed by String.Intern(), then nop out that call
+				// .NET Reactor wraps some decrypted strings in String.Intern() to deduplicate
+				// at runtime. Since the string is now a compile-time constant, Intern is unnecessary.
 				if (ldstrIndex + 1 < block.Instructions.Count) {
 					var instr = block.Instructions[ldstrIndex + 1];
 					if (instr.OpCode.Code == Code.Call) {
@@ -79,19 +95,34 @@ namespace de4dot.code {
 
 		public DynamicStringInliner(IAssemblyClient assemblyClient) => this.assemblyClient = assemblyClient;
 
-		public void Initialize(IEnumerable<int> methodTokens) {
+		public void Initialize(IEnumerable<StringDecrypterMethodInfo> methodInfos) {
 			methodTokenToId.Clear();
-			foreach (var methodToken in methodTokens) {
-				if (methodTokenToId.ContainsKey(methodToken))
+			foreach (var info in methodInfos) {
+				if (methodTokenToId.ContainsKey(info.MethodToken))
 					continue;
-				methodTokenToId[methodToken] = assemblyClient.StringDecrypterService.DefineStringDecrypter(methodToken);
+				int methodId = assemblyClient.StringDecrypterService.DefineStringDecrypter(info.MethodToken);
+				methodTokenToId[info.MethodToken] = methodId;
 			}
 		}
 
 		protected override CallResult CreateCallResult(IMethod method, MethodSpec gim, Block block, int callInstrIndex) {
-			if (!methodTokenToId.TryGetValue(method.MDToken.ToInt32(), out int methodId))
+			if (gim is not null && !IsGenericStringInstantiation(gim))
+				return null;
+			if (!TryGetMethodId(method, out int methodId))
 				return null;
 			return new MyCallResult(block, callInstrIndex, methodId, gim);
+		}
+
+		bool TryGetMethodId(IMethod method, out int methodId) {
+			methodId = 0;
+			int methodToken = method.MDToken.ToInt32();
+			if (methodTokenToId.TryGetValue(methodToken, out methodId))
+				return true;
+			var resolved = (method as IMethodDefOrRef)?.ResolveMethodDef();
+			if (resolved is null)
+				return false;
+			methodToken = resolved.MDToken.ToInt32();
+			return methodTokenToId.TryGetValue(methodToken, out methodId);
 		}
 
 		protected override void InlineAllCalls() {
@@ -150,8 +181,18 @@ namespace de4dot.code {
 		}
 
 		protected override CallResult CreateCallResult(IMethod method, MethodSpec gim, Block block, int callInstrIndex) {
-			if (stringDecrypters.Find(method) == null)
+			if (gim is not null && !IsGenericStringInstantiation(gim))
 				return null;
+			var handler = stringDecrypters.Find(method);
+			if (handler is null) {
+				var resolved = (method as IMethodDefOrRef)?.ResolveMethodDef();
+				if (resolved is null)
+					return null;
+				handler = stringDecrypters.Find(resolved);
+				if (handler is null)
+					return null;
+				method = resolved;
+			}
 			return new MyCallResult(block, callInstrIndex, method, gim);
 		}
 	}
