@@ -404,6 +404,10 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldvirtftn:valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 			case Code.Ldflda:	valueStack.Pop(); valueStack.Push(new ObjectValue()); break;
 
+			case Code.Newarr:	Emulate_Newarr(instr); break;
+			case Code.Nop:		break;
+			case Code.Pop:		valueStack.Pop(); break;
+
 			case Code.Stelem:
 			case Code.Stelem_I:
 			case Code.Stelem_I1:
@@ -477,10 +481,7 @@ namespace de4dot.blocks.cflow {
 			case Code.Leave_S:
 			case Code.Localloc:
 			case Code.Mkrefany:
-			case Code.Newarr:	Emulate_Newarr(instr); break;
 			case Code.Newobj:
-			case Code.Nop:		break;
-			case Code.Pop:		valueStack.Pop(); break;
 			case Code.Readonly:
 			case Code.Refanytype:
 			case Code.Refanyval:
