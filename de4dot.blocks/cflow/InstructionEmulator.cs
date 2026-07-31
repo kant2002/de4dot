@@ -510,31 +510,39 @@ namespace de4dot.blocks.cflow {
 			}
 		}
 
-		// Only types whose size is fixed by the spec, independent of the runtime and the process
-		// bitness the obfuscated assembly will actually run under. IntPtr/UIntPtr, object references
-		// and non-primitive value types are deliberately absent: guessing a size for those would let
-		// the emulator report a constant real execution can contradict, and a wrong constant here
-		// silently picks the wrong switch arm downstream. System.Guid is included because its layout
-		// is part of its documented contract.
 		void Emulate_Sizeof(Instruction instr) {
+			// Only types whose size is fixed by the spec, independent of the runtime and the process
+			// bitness the obfuscated assembly will actually run under; -1 for everything else.
+			// IntPtr/UIntPtr, object references and non-primitive value types are deliberately absent:
+			// guessing a size for those would let the emulator report a constant real execution can
+			// contradict, and a wrong constant here silently picks the wrong switch arm downstream.
+			// System.Guid is included because its layout is part of its documented contract.
+			int size = -1;
 			if (instr.Operand is ITypeDefOrRef tdr) {
-				switch (tdr.FullName) {
-				case "System.Boolean":	valueStack.Push(new Int32Value(1)); return;
-				case "System.SByte":	valueStack.Push(new Int32Value(sizeof(sbyte))); return;
-				case "System.Byte":		valueStack.Push(new Int32Value(sizeof(byte))); return;
-				case "System.Char":		valueStack.Push(new Int32Value(sizeof(char))); return;
-				case "System.Int16":	valueStack.Push(new Int32Value(sizeof(short))); return;
-				case "System.UInt16":	valueStack.Push(new Int32Value(sizeof(ushort))); return;
-				case "System.Int32":	valueStack.Push(new Int32Value(sizeof(int))); return;
-				case "System.UInt32":	valueStack.Push(new Int32Value(sizeof(uint))); return;
-				case "System.Int64":	valueStack.Push(new Int32Value(sizeof(long))); return;
-				case "System.UInt64":	valueStack.Push(new Int32Value(sizeof(ulong))); return;
-				case "System.Single":	valueStack.Push(new Int32Value(sizeof(float))); return;
-				case "System.Double":	valueStack.Push(new Int32Value(sizeof(double))); return;
-				case "System.Guid":		valueStack.Push(new Int32Value(16)); return;
-				}
+				size = tdr.FullName switch {
+					"System.Boolean" => 1,
+					"System.SByte" => sizeof(sbyte),
+					"System.Byte" => sizeof(byte),
+					"System.Char" => sizeof(char),
+					"System.Int16" => sizeof(short),
+					"System.UInt16" => sizeof(ushort),
+					"System.Int32" => sizeof(int),
+					"System.UInt32" => sizeof(uint),
+					"System.Int64" => sizeof(long),
+					"System.UInt64" => sizeof(ulong),
+					"System.Single" => sizeof(float),
+					"System.Double" => sizeof(double),
+					"System.Guid" => 16,
+					_ => -1,
+				};
 			}
-			valueStack.Push(Int32Value.CreateUnknown());
+
+			if (size < 0) {
+				valueStack.Push(Int32Value.CreateUnknown());
+			}
+			else {
+				valueStack.Push(new Int32Value(size));
+			}
 		}
 
 		void Emulate_Conv_U1(Instruction instr) {
