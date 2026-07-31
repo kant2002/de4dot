@@ -502,6 +502,7 @@ namespace de4dot.blocks.cflow {
 			case Code.Tailcall:
 			case Code.Throw:
 			case Code.Unaligned:
+			case Code.Unbox:
 			case Code.Volatile:
 			default:
 				UpdateStack(instr);
