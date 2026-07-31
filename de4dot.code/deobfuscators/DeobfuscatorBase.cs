@@ -27,7 +27,7 @@ using de4dot.blocks;
 using de4dot.blocks.cflow;
 
 namespace de4dot.code.deobfuscators {
-	public abstract class DeobfuscatorBase : IDeobfuscator, IModuleWriterListener {
+	public abstract class DeobfuscatorBase : IDeobfuscator, IStringDecrypterMethodInfoProvider, IModuleWriterListener {
 		public const string DEFAULT_VALID_NAME_REGEX = @"^[a-zA-Z_<{$][a-zA-Z_0-9<>{}$.`-]*$";
 		public const string DEFAULT_ASIAN_VALID_NAME_REGEX = @"^[\u2E80-\u9FFFa-zA-Z_<{$][\u2E80-\u9FFFa-zA-Z_0-9<>{}$.`-]*$";
 
@@ -241,6 +241,19 @@ namespace de4dot.code.deobfuscators {
 		}
 
 		public abstract IEnumerable<int> GetStringDecrypterMethods();
+
+		/// <summary>
+		///     The default view of this deobfuscator's string decrypters: the tokens it already
+		///     reports, wrapped.
+		///
+		///     Here rather than at each call site so that a deobfuscator with more to say about a
+		///     decrypter overrides one method, instead of every caller having to test for the richer
+		///     form and construct the fallback itself.
+		/// </summary>
+		public virtual IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos() {
+			foreach (var token in GetStringDecrypterMethods())
+				yield return new StringDecrypterMethodInfo(token);
+		}
 
 		class MethodCallRemover {
 			Dictionary<string, MethodDefAndDeclaringTypeDict<bool>> methodNameInfos = new Dictionary<string, MethodDefAndDeclaringTypeDict<bool>>();
