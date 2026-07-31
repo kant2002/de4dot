@@ -385,7 +385,7 @@ namespace de4dot.blocks.cflow {
 			case Code.Ldind_U4:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
 
 			case Code.Ldlen:	valueStack.Pop(); valueStack.Push(Int32Value.CreateUnknown()); break;
-			case Code.Sizeof:	valueStack.Push(Int32Value.CreateUnknown()); break;
+			case Code.Sizeof:	Emulate_Sizeof(instr); break;
 
 			case Code.Ldfld:	Emulate_Ldfld(instr); break;
 			case Code.Ldsfld:	Emulate_Ldsfld(instr); break;
@@ -507,6 +507,41 @@ namespace de4dot.blocks.cflow {
 			else {
 				valueStack.Pop(pops);
 				valueStack.Push(pushes);
+			}
+		}
+
+		// Only types whose size is fixed by the spec, independent of the runtime and the process
+		// bitness the obfuscated assembly will actually run under; -1 for everything else.
+		// IntPtr/UIntPtr, object references and non-primitive value types are deliberately absent:
+		// guessing a size for those would let the emulator report a constant real execution can
+		// contradict, and a wrong constant here silently picks the wrong switch arm downstream.
+		// System.Guid is included because its layout is part of its documented contract.
+		void Emulate_Sizeof(Instruction instr) {
+			int size = -1;
+			if (instr.Operand is ITypeDefOrRef tdr) {
+				size = tdr.FullName switch {
+					"System.Boolean" => 1,
+					"System.SByte" => sizeof(sbyte),
+					"System.Byte" => sizeof(byte),
+					"System.Char" => sizeof(char),
+					"System.Int16" => sizeof(short),
+					"System.UInt16" => sizeof(ushort),
+					"System.Int32" => sizeof(int),
+					"System.UInt32" => sizeof(uint),
+					"System.Int64" => sizeof(long),
+					"System.UInt64" => sizeof(ulong),
+					"System.Single" => sizeof(float),
+					"System.Double" => sizeof(double),
+					"System.Guid" => 16,
+					_ => -1,
+				};
+			}
+
+			if (size < 0) {
+				valueStack.Push(Int32Value.CreateUnknown());
+			}
+			else {
+				valueStack.Push(new Int32Value(size));
 			}
 		}
 
