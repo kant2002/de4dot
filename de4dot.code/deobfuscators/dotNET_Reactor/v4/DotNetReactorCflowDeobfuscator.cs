@@ -80,10 +80,13 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				if (method == null)
 					continue;
 
-				var branchValue = GetConstantBranchValue(method);
+				var branchValue = GetConstantBranchValue(method, out var why);
 				if (branchValue == null) {
-					Logger.v("Reactor cflow: predicate fold declined, {0} is not provably constant",
-						Utils.RemoveNewlines(method));
+					// The reason, not just the refusal. A corpus run that loses a resolution here has
+					// to be able to tell a shape this does not model from a field the write scan
+					// would not vouch for -- otherwise the next person is left inferring which.
+					Logger.v("Reactor cflow: predicate fold declined, {0}: {1}",
+						Utils.RemoveNewlines(method), why);
 					continue;
 				}
 
@@ -114,21 +117,24 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		///     where a provably-null operand is <c>ldnull</c> or an <c>ldsfld</c> of a field
 		///     <see cref="NeverWrittenStaticFields" /> vouches for.
 		/// </summary>
-		bool? GetConstantBranchValue(MethodDef method) {
+		bool? GetConstantBranchValue(MethodDef method, out string why) {
+			why = null;
 			// The call is replaced by a single push, so anything the call would have popped must be
 			// nothing at all -- otherwise the arguments are stranded and the stack depth at the
 			// branch, and at every successor merge, is wrong.
 			if (!method.IsStatic || method.HasThis || method.MethodSig == null ||
 				method.MethodSig.Params.Count != 0)
-				return null;
+				return Decline(out why, "it is not a parameterless static method");
 			// A generic method's operand is a MethodSpec rather than a MethodDef, so this is only
 			// belt and braces, but the body of an open generic proves nothing about any of its
 			// instantiations.
 			if (method.HasGenericParameters)
-				return null;
+				return Decline(out why, "it is generic");
 			var body = method.Body;
-			if (body == null || body.HasExceptionHandlers || body.HasVariables)
-				return null;
+			if (body == null)
+				return Decline(out why, "it has no body");
+			if (body.HasExceptionHandlers || body.HasVariables)
+				return Decline(out why, "its body has locals or exception handlers");
 
 			// Non-nop instruction stream. Stripping nops is safe here only because none of the
 			// shapes below contains a branch, so no branch target can be dropped.
@@ -139,39 +145,53 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				seq.Add(instr);
 			}
 			if (seq.Count < 2 || seq[seq.Count - 1].OpCode.Code != Code.Ret)
-				return null;
+				return Decline(out why, "its body does not end in a return of a single value");
 
 			// Single value + ret
 			if (seq.Count == 2) {
 				var v = seq[0];
 				if (v.IsLdcI4())
 					return v.GetLdcI4Value() != 0;
-				if (IsProvablyNull(v))
+				if (IsProvablyNull(v, out var single))
 					return false; // null -> brtrue not taken
-				return null;
+				return Decline(out why, single ?? "it returns a value this does not model");
 			}
 
 			// Comparison of two provably-null operands + ret
 			if (seq.Count == 4) {
-				if (IsProvablyNull(seq[0]) && IsProvablyNull(seq[1])) {
-					switch (seq[2].OpCode.Code) {
-					case Code.Ceq:      // null == null -> 1 -> true
-						return true;
-					case Code.Cgt_Un:   // null != null -> 0 -> false
-						return false;
-					}
-				}
+				var comparison = seq[2].OpCode.Code;
+				if (comparison != Code.Ceq && comparison != Code.Cgt_Un)
+					return Decline(out why, $"it ends in {seq[2].OpCode.Name}, which this does not model");
+				if (!IsProvablyNull(seq[0], out var left))
+					return Decline(out why, $"the left operand is not provably null: {left}");
+				if (!IsProvablyNull(seq[1], out var right))
+					return Decline(out why, $"the right operand is not provably null: {right}");
+				return comparison == Code.Ceq;   // null == null -> 1 -> true; null != null -> 0
 			}
 
+			return Decline(out why, $"its body is {seq.Count} instructions, which is no shape this models");
+		}
+
+		static bool? Decline(out string why, string reason) {
+			why = reason;
 			return null;
 		}
 
-		bool IsProvablyNull(Instruction instr) {
+		/// <summary>
+		///     Whether the instruction pushes a provable null, and when it does not, why not --
+		///     which is the difference between "the pass cannot see this shape" and "the field is
+		///     one the write scan will not vouch for".
+		/// </summary>
+		bool IsProvablyNull(Instruction instr, out string why) {
+			why = null;
 			if (instr.OpCode.Code == Code.Ldnull)
 				return true;
-			if (instr.OpCode.Code != Code.Ldsfld)
+			if (instr.OpCode.Code != Code.Ldsfld) {
+				why = $"it is {instr.OpCode.Name}, not ldnull or ldsfld";
 				return false;
-			return NullFields.IsProvablyNull(NeverWrittenStaticFields.GetField(instr));
+			}
+			why = NullFields.Explain(NeverWrittenStaticFields.GetField(instr));
+			return why == null;
 		}
 	}
 }

@@ -323,17 +323,27 @@ EXPECTATIONS = [
                 calls=["Live"],
                 body_lacks=["Marker::Dead"]),
 
+    # The same fold on an internal field rather than a private one -- the visibility rule's happy
+    # path, and the shape Reactor actually emits.
+    Expectation("opaque_field_compare_null",
+                log_contains=["Reactor cflow: folded predicate", "Pred::Test"],
+                log_lacks=["fold declined"],
+                calls=["Live"],
+                body_lacks=["Marker::Dead"]),
+
     # `return Pick() > 0` in the same position: a real branch that ends in `cgt; ret`, which is what
     # the previous last-instruction heuristic mistook for a predicate. Both arms must survive.
     Expectation("opaque_real_computation",
-                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test"],
+                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test",
+                              "ends in cgt"],
                 log_lacks=["folded predicate"],
                 il_contains=["Marker::Dead", "Marker::Live"]),
 
     # The field IS assigned -- through ldsflda, so the module contains no store to find. A write check
     # that looks for stsfld folds this one and is wrong about which arm runs.
     Expectation("opaque_field_written_by_address",
-                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test"],
+                log_contains=["Reactor cflow: predicate fold declined", "Pred::Test",
+                              "the field is assigned somewhere in the module"],
                 log_lacks=["folded predicate"],
                 il_contains=["Marker::Dead", "Marker::Live"]),
 ]

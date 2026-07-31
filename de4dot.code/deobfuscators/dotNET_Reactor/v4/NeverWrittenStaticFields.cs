@@ -43,31 +43,55 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 	class NeverWrittenStaticFields {
 		readonly ModuleDef module;
 		HashSet<FieldDef> written;
-		// Set when a field-naming instruction could not be resolved to a FieldDef. The write may
-		// have been to a field someone later asks about, so no answer can be trusted afterwards.
-		bool blind;
+		// Field-naming instructions that would not resolve, by "Type::name". Refusing only the
+		// fields those names could denote, rather than every field in the module: Reactor mangles
+		// metadata, and one unresolvable reference to something unrelated used to be enough to
+		// abandon every fold in the assembly.
+		HashSet<string> unresolved;
+		// No module to scan at all, so no field can be proven anything.
+		bool unresolvedEverything;
 
 		public NeverWrittenStaticFields(ModuleDef module) => this.module = module;
 
 		/// <summary>
 		///     True when <paramref name="field" /> is a static reference-type field that nothing in
-		///     the module assigns and nothing outside the module can name. Scanning is deferred to
-		///     the first call, because the callers only reach a candidate site on a small minority
-		///     of methods and the scan walks every instruction in the module.
+		///     the module assigns and nothing outside the module can name.
 		/// </summary>
-		public bool IsProvablyNull(FieldDef field) {
-			if (field == null || !field.IsStatic)
-				return false;
+		public bool IsProvablyNull(FieldDef field) => Explain(field) == null;
+
+		/// <summary>
+		///     Null when the field is provably always null, otherwise the reason it is not -- which
+		///     is the part worth logging. A fold that silently declines is a fold nobody can
+		///     attribute: the pass says the callee was not provably constant, and the next person
+		///     has to guess between the shape, the visibility rule and the write scan.
+		///
+		///     Scanning is deferred to the first call, because the callers only reach a candidate
+		///     site on a small minority of methods and the scan walks every instruction.
+		/// </summary>
+		public string Explain(FieldDef field) {
+			if (field == null)
+				return "the field reference did not resolve";
+			if (!field.IsStatic)
+				return "the field is not static";
 			// An unassigned value type is its zero value, not null, and a generic parameter type
 			// could be instantiated as either.
 			var fieldType = field.FieldType;
 			if (fieldType == null || fieldType.IsValueType || fieldType.IsGenericParameter)
-				return false;
-			if (CanBeAssignedOutsideModule(field))
-				return false;
+				return "the field is not of a reference type";
+			var reach = ReachOutsideModule(field);
+			if (reach != null)
+				return reach;
 			EnsureScanned();
-			return !blind && !written.Contains(field);
+			if (unresolvedEverything)
+				return "the field's module could not be scanned";
+			if (unresolved.Contains(Key(field)))
+				return "another reference to this field in the module did not resolve";
+			if (written.Contains(field))
+				return "the field is assigned somewhere in the module";
+			return null;
 		}
+
+		static string Key(IField field) => $"{field.DeclaringType?.FullName}::{field.Name}";
 
 		/// <summary>
 		///     The only two field accesses that leave the field's value alone. Everything else --
@@ -87,9 +111,11 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			if (written != null)
 				return;
 			written = new HashSet<FieldDef>();
+			unresolved = new HashSet<string>();
 			if (module == null) {
 				// No module means no evidence, and no evidence must not read as "nothing is written".
-				blind = true;
+				// Nothing can be keyed here, so nothing can be proven either.
+				unresolvedEverything = true;
 				return;
 			}
 
@@ -108,11 +134,11 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 						// A reference into another assembly cannot be to a field of this module, so
 						// failing to resolve it costs nothing. One that claims to be ours and still
 						// will not resolve -- Reactor does mangle metadata -- could be a write to
-						// any field here, and there is then nothing left to prove.
-						if (MayNameFieldInThisAssembly(fref)) {
-							blind = true;
-							return;
-						}
+						// the field it names, so that name is refused. Only that name: an
+						// unresolvable reference to one field says nothing about any other, and
+						// giving up on the whole module for it forfeits every fold in the assembly.
+						if (MayNameFieldInThisAssembly(fref))
+							unresolved.Add(Key(fref));
 					}
 				}
 			}
@@ -127,29 +153,29 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		}
 
 		/// <summary>
-		///     True when something outside this module could assign the field, which puts it beyond
-		///     what a module-wide scan can prove. Reflection by name from another assembly defeats
-		///     even this, and nothing can rule that out; the in-module reflection case is covered by
-		///     the ldtoken half of the load-only rule.
+		///     The way something outside this module could assign the field, or null when there is
+		///     none. Anything reported here puts the field beyond what a module-wide scan can prove.
+		///     Reflection by name from another assembly defeats even this, and nothing can rule that
+		///     out; the in-module reflection case is covered by the ldtoken half of the load rule.
 		/// </summary>
-		static bool CanBeAssignedOutsideModule(FieldDef field) {
+		static string ReachOutsideModule(FieldDef field) {
 			// Only the declaring type can name a private field, and it lives in this module.
 			if (field.IsPrivate || field.IsFamilyAndAssembly)
-				return false;
+				return null;
 			if (!field.IsAssembly && IsReachableOutsideAssembly(field.DeclaringType))
-				return true;
+				return "the field is visible outside the assembly";
 			// Assembly-scoped, either declared so or made so by an unexported declaring type. That
 			// still reaches past this module if the assembly has other modules or names friends.
 			var asm = field.Module?.Assembly;
 			if (asm == null)
-				return false;
+				return null;
 			if (asm.Modules.Count > 1)
-				return true;
+				return "the assembly has more than one module";
 			foreach (var ca in asm.CustomAttributes) {
 				if (ca.TypeFullName == "System.Runtime.CompilerServices.InternalsVisibleToAttribute")
-					return true;
+					return "the assembly declares InternalsVisibleTo, so another assembly can assign it";
 			}
-			return false;
+			return null;
 		}
 
 		static bool IsReachableOutsideAssembly(TypeDef type) {
