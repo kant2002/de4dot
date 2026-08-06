@@ -5,7 +5,7 @@ namespace de4dot.blocks.tests {
 	[Properties(MaxTest = 1_000)]
 	public sealed class EmulationProperties {
 		[Property(Arbitrary = [typeof(Arbitraries)])]
-		public void SingleInstructionMatchRuntime(OpCode opCode, int a, int b) => InstructionVerification.ValidateOpCode(a, b, opCode);
+		public void SingleInstructionMatchRuntime((OpCode, (int, int)) expr) => InstructionVerification.ValidateOpCode(expr.Item2.Item1, expr.Item2.Item2, expr.Item1);
 
 	}
 }

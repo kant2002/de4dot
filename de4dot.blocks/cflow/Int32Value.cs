@@ -455,13 +455,9 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shl(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
-			// A count outside 0..31 is undefined in CIL, so nothing about the result is knowable.
-			// The unsigned compare folds the negative case into the same test.
-			if ((uint)b.Value >= sizeof(int) * 8)
-				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			int shift = b.Value;
+			int shift = b.Value & 31;
 			uint validMask = (a.ValidMask << shift) | (uint.MaxValue >> (sizeof(int) * 8 - shift));
 			return new Int32Value(a.Value << shift, validMask);
 		}
@@ -469,11 +465,9 @@ namespace de4dot.blocks.cflow {
 		public static Int32Value Shr(Int32Value a, Int32Value b) {
 			if (b.HasUnknownBits())
 				return CreateUnknown();
-			if ((uint)b.Value >= sizeof(int) * 8)
-				return CreateUnknown();
 			if (b.Value == 0)
 				return a;
-			int shift = b.Value;
+			int shift = b.Value & 31;
 			uint validMask = a.ValidMask >> shift;
 			if (a.IsBitValid(sizeof(int) * 8 - 1))
 				validMask |= (uint.MaxValue << (sizeof(int) * 8 - shift));

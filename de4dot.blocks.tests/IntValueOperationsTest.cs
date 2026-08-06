@@ -42,22 +42,14 @@ namespace de4dot.blocks.tests {
 				Int32Value.Shr_Un(Known(unchecked((int)0x80000000u)), Known(count)));
 		}
 
-		/// <summary>
-		/// A count of 32 is a no-op in C# — the count is masked — but undefined in CIL. Computing a
-		/// mask from <c>32 - count</c> yields a shift by zero, which is the exact shape this guard
-		/// exists for.
-		/// </summary>
 		[TestMethod]
-		[DataRow(32)]
-		[DataRow(64)]
-		[DataRow(-1)]
-		[DataRow(int.MinValue)]
-		public void ShiftsOutOfRangeAreUnknown(int count) {
-			AssertUnknown(Int32Value.Shl(Unknown(), Known(count)));
-			AssertUnknown(Int32Value.Shr(Unknown(), Known(count)));
-			AssertUnknown(Int32Value.Shr_Un(Unknown(), Known(count)));
-			// Also unknown when the operand IS known: the operation itself is undefined.
-			AssertUnknown(Int32Value.Shl(Known(1), Known(count)));
+		[DataRow(32, 43, 43)]
+		[DataRow(64, 43, 43)]
+		[DataRow(-1, -2147483648, 0)]
+		[DataRow(int.MinValue, 43, 43)]
+		public void ShiftsOutOfRangeAreKnown(int count, int expectedl, int expectedr) {
+			AssertKnown(expectedl, Int32Value.Shl(Known(43), Known(count)));
+			AssertKnown(expectedr, Int32Value.Shr(Known(43), Known(count)));
 		}
 
 		[TestMethod]
@@ -129,6 +121,8 @@ namespace de4dot.blocks.tests {
 	public sealed class Int64ValueOperationsTest {
 		static Int64Value Known(long value) => new Int64Value(value);
 		static Int32Value Count(int value) => new Int32Value(value);
+		static Int64Value Unknown() => Int64Value.CreateUnknown();
+		static Int32Value Unknown32() => Int32Value.CreateUnknown();
 
 		static void AssertKnown(long expected, Int64Value actual) {
 			Assert.IsTrue(actual.AllBitsValid(), $"expected the known constant {expected}, got {actual}");
@@ -145,16 +139,45 @@ namespace de4dot.blocks.tests {
 		public void ShiftsInRangeAreComputed(int count) =>
 			AssertKnown(1L << count, Int64Value.Shl(Known(1), Count(count)));
 
+
+
+		[TestMethod]
+		[DataRow(64)]
+		[DataRow(128)]
+		public void ShiftsOutOfRangeAreKnown(int count) {
+			AssertKnown(43, Int64Value.Shr(Known(43), Count(count)));
+			AssertKnown(43, Int64Value.Shr(Known(43), Count(count)));
+		}
+
+		[TestMethod]
+		[DataRow(-1)]
+		[DataRow(int.MinValue)]
+		public void ShiftsNegativeUnknown(int count) {
+			AssertUnknown(Int64Value.Shl(Unknown(), Count(count)));
+			AssertUnknown(Int64Value.Shr(Unknown(), Count(count)));
+			AssertUnknown(Int64Value.Shr_Un(Unknown(), Count(count)));
+			// Also unknown when the operand IS known: the operation itself is undefined.
+			AssertUnknown(Int64Value.Shl(Known(1L), Count(count)));
+		}
 		[TestMethod]
 		[DataRow(64)]
 		[DataRow(128)]
 		[DataRow(-1)]
 		[DataRow(int.MinValue)]
-		public void ShiftsOutOfRangeAreUnknown(int count) {
-			AssertUnknown(Int64Value.Shl(Int64Value.CreateUnknown(), Count(count)));
-			AssertUnknown(Int64Value.Shr(Int64Value.CreateUnknown(), Count(count)));
-			AssertUnknown(Int64Value.Shr_Un(Int64Value.CreateUnknown(), Count(count)));
-			AssertUnknown(Int64Value.Shl(Known(1), Count(count)));
+		public void ShiftsUnknownValuesIsUnknown(int count) {
+			AssertUnknown(Int64Value.Shl(Unknown(), Count(count)));
+			AssertUnknown(Int64Value.Shl(Known(count), Unknown32()));
+			AssertUnknown(Int64Value.Shr(Unknown(), Count(count)));
+			AssertUnknown(Int64Value.Shr(Known(count), Unknown32()));
+			AssertUnknown(Int64Value.Shr_Un(Unknown(), Count(count)));
+			AssertUnknown(Int64Value.Shr_Un(Known(count), Unknown32()));
+		}
+
+		[TestMethod]
+		public void ShiftByAnUnknownCountIsUnknown() {
+			AssertUnknown(Int64Value.Shl(Known(1), Unknown32()));
+			AssertUnknown(Int64Value.Shr(Known(1), Unknown32()));
+			AssertUnknown(Int64Value.Shr_Un(Known(1), Unknown32()));
 		}
 
 		/// <summary>A count of 32 is in range for int64 and must be computed, not rejected.</summary>
