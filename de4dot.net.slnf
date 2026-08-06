@@ -8,6 +8,7 @@
       "de4dot-x64\\de4dot-x64.csproj",
       "de4dot.blocks.tests\\de4dot.blocks.tests.csproj",
       "de4dot.blocks\\de4dot.blocks.csproj",
+      "de4dot.code.tests\\de4dot.code.tests.csproj",
       "de4dot.code\\de4dot.code.csproj",
       "de4dot.cui\\de4dot.cui.csproj",
       "de4dot.mcp\\de4dot.mcp.csproj",
