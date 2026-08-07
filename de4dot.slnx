@@ -12,6 +12,7 @@
     <File Path="De4DotCommon.props" />
     <File Path="Directory.Build.props" />
     <File Path="Directory.Packages.props" />
+    <File Path="global.json" />
     <File Path="test.ps1" />
   </Folder>
   <Project Path="AssemblyData/AssemblyData.csproj" />

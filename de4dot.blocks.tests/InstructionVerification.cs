@@ -24,6 +24,9 @@ namespace de4dot.blocks.tests {
 			il.Emit(opCode);
 			il.Emit(OpCodes.Ret);
 
+			validateInstruction.DefineParameter(1, ParameterAttributes.In, "a");
+			validateInstruction.DefineParameter(2, ParameterAttributes.In, "b");
+
 			ModuleDefMD moduleDef = ModuleDefMD.Load(module);
 			var int32Type = moduleDef.CorLibTypes.Int32;
 			MethodDef methodDef = new MethodDefUser("ValidateInstruction",
@@ -37,6 +40,7 @@ namespace de4dot.blocks.tests {
 			byte[] ilBytes = GetDynamicMethodIL(validateInstruction);
 #endif
 
+			int expectedValue = invokeValidateInstruction(a, b);
 			methodDef.Body = dnlib.DotNet.Emit.MethodBodyReader.CreateCilBody(
 				moduleDef,
 				ilBytes,
@@ -44,7 +48,7 @@ namespace de4dot.blocks.tests {
 				[new dnlib.DotNet.Parameter(0, int32Type), new dnlib.DotNet.Parameter(1, int32Type)],
 				0, 1, (uint)ilBytes.Length, 0);
 
-			var result = invokeValidateInstruction(a, b);
+			
 			InstructionEmulator emulator = new InstructionEmulator();
 			emulator.Initialize(methodDef, true);
 			emulator.SetArg(methodDef.Parameters[0], new Int32Value(a));
@@ -52,7 +56,9 @@ namespace de4dot.blocks.tests {
 			var blocks = new Blocks(methodDef);
 			emulator.Emulate(blocks.MethodBlocks.GetAllBlocks()[0].Instructions);
 			var emulatedValue = (Int32Value)emulator.Pop();
-			Assert.AreEqual(result, emulatedValue.Value);
+			Assert.IsFalse(emulatedValue.HasUnknownBits(), $"The emulated result of expression '{a} {opCode} {b}' should be known");
+			var actualValue = emulatedValue.Value;
+			Assert.AreEqual(expectedValue, actualValue, $"The emulated result of expression '{a} {opCode} {b}' should match the runtime value");
 		}
 
 #if !NETFRAMEWORK
