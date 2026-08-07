@@ -54,8 +54,26 @@ namespace AssemblyData {
 			var methodInfo = FindMethod(methodToken);
 			if (methodInfo == null)
 				throw new ApplicationException($"Could not find method {methodToken:X8}");
-			if (methodInfo.ReturnType != typeof(string) && methodInfo.ReturnType != typeof(object))
+
+			// A decrypter declared as `!!0 M<T>(int32)` is an open generic definition and cannot be
+			// invoked as it stands. Close it over string so there is something to call. Its return
+			// type is then string, which the check below accepts on the ordinary path.
+			if (methodInfo.IsGenericMethodDefinition && methodInfo.GetGenericArguments().Length == 1) {
+				try {
+					methodInfo = methodInfo.MakeGenericMethod(typeof(string));
+				}
+				catch {
+					// A constraint string does not satisfy, or a reflection context that will not
+					// build the instantiation. Keep the open definition; the return type check below
+					// then rejects it with a message naming the method, which is a far better failure
+					// than an InvalidOperationException out of Invoke further down.
+				}
+			}
+
+			var returnType = methodInfo.ReturnType;
+			if (returnType != typeof(string) && returnType != typeof(object))
 				throw new ApplicationException($"Method return type must be string or object: {methodInfo}");
+
 			return stringDecrypter.DefineStringDecrypter(methodInfo);
 		}
 

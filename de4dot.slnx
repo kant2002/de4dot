@@ -25,6 +25,7 @@
   <Project Path="de4dot-x64/de4dot-x64.csproj" Condition="$(TargetFramework) == 'net48'" />
   <Project Path="de4dot.blocks.tests/de4dot.blocks.tests.csproj" Id="7f6ea6c5-7191-4751-a1f4-93b9c5d3a821" />
   <Project Path="de4dot.blocks/de4dot.blocks.csproj" />
+  <Project Path="de4dot.constdata/de4dot.constdata.csproj" />
   <Project Path="de4dot.code/de4dot.code.csproj" />
   <Project Path="de4dot.cui/de4dot.cui.csproj" />
   <Project Path="de4dot.mcp/de4dot.mcp.csproj" Condition="$(TargetFramework) != 'net48'" />

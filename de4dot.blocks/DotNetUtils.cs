@@ -200,6 +200,21 @@ namespace de4dot.blocks {
 		public static MethodDef? GetMethod2(ModuleDef module, IMethod? method) {
 			if (method == null)
 				return null;
+			if (method is MethodDef md)
+				return md;
+
+			// A call to a method on a *generic instantiation* of a type in this module is encoded as a
+			// MemberRef whose DeclaringType is a TypeSpec (e.g. `C`1<!T>::M(...)`). The scope type
+			// resolves to the right TypeDef, but TypeDef.FindMethod(name, sig) does not match such a
+			// MemberRef's signature, so the plain lookup below returns null and the callee looks
+			// unreferenced. Callers use this to decide whether a method is still used, so a false null
+			// here gets live methods deleted, leaving dangling MemberRefs. Ask dnlib to resolve the
+			// reference properly first.
+			var resolved = (method as IMethodDefOrRef)?.ResolveMethodDef()
+				?? ((method as MethodSpec)?.Method as IMethodDefOrRef)?.ResolveMethodDef();
+			if (resolved != null && resolved.Module == module)
+				return resolved;
+
 			return GetMethod(module, method, method.DeclaringType.ScopeType);
 		}
 
@@ -363,8 +378,18 @@ namespace de4dot.blocks {
 				return;
 			}
 
-			var oldInstrs = method.Body.Instructions;
-			var oldExHandlers = method.Body.ExceptionHandlers;
+			CopyBody(method.Body.Instructions, method.Body.ExceptionHandlers, out instructions, out exceptionHandlers);
+		}
+
+		/// <summary>
+		///     Clone an instruction list and its handlers, remapping every branch target, switch target
+		///     array and handler boundary (<c>FilterStart</c> included) into the clone.
+		///
+		///     Takes the lists rather than a method so a detached copy can itself be cloned — see
+		///     <see cref="MethodBodySnapshot"/>, which must hand out a fresh copy on every restore.
+		/// </summary>
+		public static void CopyBody(IList<Instruction> oldInstrs, IList<ExceptionHandler> oldExHandlers,
+				out IList<Instruction> instructions, out IList<ExceptionHandler> exceptionHandlers) {
 			instructions = new List<Instruction>(oldInstrs.Count);
 			exceptionHandlers = new List<ExceptionHandler>(oldExHandlers.Count);
 			var oldToIndex = Utils.CreateObjectToIndexDictionary(oldInstrs);

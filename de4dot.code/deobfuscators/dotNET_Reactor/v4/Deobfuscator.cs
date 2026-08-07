@@ -17,7 +17,9 @@
     along with de4dot.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.RegularExpressions;
 using dnlib.PE;
 using dnlib.DotNet;
@@ -90,7 +92,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			};
 	}
 
-	class Deobfuscator : DeobfuscatorBase {
+	sealed class Deobfuscator : DeobfuscatorBase {
 		Options options;
 		string obfuscatorName = DeobfuscatorInfo.THE_NAME;
 
@@ -98,6 +100,8 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		byte[] fileData;
 		MethodsDecrypter methodsDecrypter;
 		StringDecrypter stringDecrypter;
+		GenericConstantDecrypter genericConstantDecrypter;
+		GenericConstantInliner genericConstantInliner;
 		BooleanDecrypter booleanDecrypter;
 		BooleanValueInliner booleanValueInliner;
 		MetadataTokenObfuscator metadataTokenObfuscator;
@@ -127,18 +131,20 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		public override string Type => DeobfuscatorInfo.THE_TYPE;
 		public override string TypeLong => DeobfuscatorInfo.THE_NAME + " 4.x";
 		public override string Name => obfuscatorName;
-		protected override bool CanInlineMethods => startedDeobfuscating ? options.InlineMethods : true;
+		protected override bool CanInlineMethods => !startedDeobfuscating || options.InlineMethods;
 
-		public override IEnumerable<IBlocksDeobfuscator> BlocksDeobfuscators {
-			get {
-				var list = new List<IBlocksDeobfuscator>();
-				if (CanInlineMethods) {
-					list.Add(new DotNetReactorCflowDeobfuscator());
-					list.Add(new MethodCallInliner(false));
-				}
-				return list;
-			}
-		}
+		/// <summary>
+		/// Returns per-method block deobfuscators run during control flow deobfuscation.
+		/// Order matters: DotNetReactorCflowDeobfuscator (existing v4 patterns) runs first,
+		/// then XorSwitchDeobfuscator (v6.x XOR-keyed switch state machines), then
+		/// MethodCallInliner (inline small helper methods after cflow is resolved).
+		/// </summary>
+		public override IEnumerable<IBlocksDeobfuscator> BlocksDeobfuscators =>
+			CanInlineMethods ? [
+				new DotNetReactorCflowDeobfuscator(),
+				new xorswitch.XorSwitchDeobfuscator(),
+				new MethodCallInliner(false)
+			] : [];
 
 		public Deobfuscator(Options options)
 			: base(options) {
@@ -162,8 +168,6 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			return data;
 		}
 
-		public override void Initialize(ModuleDefMD module) => base.Initialize(module);
-
 		static Regex isRandomName = new Regex(@"^[A-Z]{30,40}$");
 		static Regex isRandomNameMembers = new Regex(@"^(?:[a-zA-Z0-9]{9,11}|[a-zA-Z0-9]{18,20})$");	// methods, fields, props, events
 		static Regex isRandomNameTypes = new Regex(@"^[a-zA-Z0-9]{18,20}(?:`\d+)?$");	// types, namespaces
@@ -183,7 +187,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		public override bool IsValidNamespaceName(string ns) {
 			if (ns == null)
 				return false;
-			if (ns.Contains("."))
+			if (ns.Contains('.'))
 				return base.IsValidNamespaceName(ns);
 			return CheckValidName(ns, isRandomNameTypes);
 		}
@@ -224,6 +228,9 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			proxyCallFixer.FindDelegateCreator(module);
 			stringDecrypter = new StringDecrypter(module);
 			stringDecrypter.Find(DeobfuscatedFile);
+			// Scan for v6.x generic constant decrypter methods: !!0 Method<T>(int32)
+			genericConstantDecrypter = new GenericConstantDecrypter(module);
+			genericConstantDecrypter.Find();
 			booleanDecrypter = new BooleanDecrypter(module);
 			booleanDecrypter.Find();
 			assemblyResolver = new AssemblyResolver(module);
@@ -389,7 +396,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				if (call.OpCode.Code != Code.Call)
 					continue;
 				var calledMethod = call.Operand as MemberRef;
-				if (calledMethod == null || calledMethod.FullName != "System.Int32 System.IntPtr::get_Size()")
+				if (calledMethod is not { FullName: "System.Int32 System.IntPtr::get_Size()" })
 					continue;
 
 				count++;
@@ -397,13 +404,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			return count;
 		}
 
-		static bool FindString(MethodDef method, string s) {
-			foreach (var cs in DotNetUtils.GetCodeStrings(method)) {
-				if (cs == s)
-					return true;
-			}
-			return false;
-		}
+		static bool FindString(MethodDef method, string s) => DotNetUtils.GetCodeStrings(method).Any(cs => cs == s);
 
 		public override bool GetDecryptedModule(int count, ref byte[] newFileData, ref DumpedMethods dumpedMethods) {
 			if (count != 0)
@@ -431,6 +432,9 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			newOne.methodsDecrypter = new MethodsDecrypter(module, methodsDecrypter);
 			newOne.proxyCallFixer = new ProxyCallFixer(module, proxyCallFixer);
 			newOne.stringDecrypter = new StringDecrypter(module, stringDecrypter);
+			// Re-detect generic decrypter methods in the reloaded module (new metadata tokens)
+			newOne.genericConstantDecrypter = new GenericConstantDecrypter(module);
+			newOne.genericConstantDecrypter.Find();
 			newOne.booleanDecrypter = new BooleanDecrypter(module, booleanDecrypter);
 			newOne.assemblyResolver = new AssemblyResolver(module, assemblyResolver);
 			newOne.resourceResolver = new ResourceResolver(module, resourceResolver);
@@ -439,8 +443,7 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 		}
 
 		void FreePEImage() {
-			if (peImage != null)
-				peImage.Dispose();
+			peImage?.Dispose();
 			peImage = null;
 		}
 
@@ -510,6 +513,18 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			proxyCallFixer.Find();
 			proxyCallFixer.DeobfuscateAll();
 
+			// Initialize generic constant decrypter AFTER proxy call resolution (proxyCallFixer above).
+			// Uses Assembly.Load() to dynamically load the assembly, triggering the .cctor which
+			// initializes the runtime byte[] data field via XorShift PRNG + block XOR decryption.
+			// The field value is then read via reflection (Module.ResolveField).
+			if (genericConstantDecrypter.Detected)
+				genericConstantDecrypter.Initialize(fileData ?? DeobUtils.ReadModule(module));
+
+			// Before anything else touches the module: v3 dumps its embedded assemblies from Begin for
+			// the same reason, and the output path this writes relative to is only guaranteed set up
+			// this early.
+			DumpCosturaAssemblies();
+
 			var cflowInliner = new CflowConstantsInliner(module, DeobfuscatedFile);
 			cflowInliner.InlineAllConstants();
 			AddTypeToBeRemoved(cflowInliner.Type, "Cflow constants type");
@@ -524,21 +539,25 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			emptyClass = new EmptyClass(module);
 
 			if (options.DecryptBools) {
-				booleanValueInliner.Add(booleanDecrypter.Method, (method, gim, args) => {
-					return booleanDecrypter.Decrypt((int)args[0]);
-				});
+				booleanValueInliner.Add(booleanDecrypter.Method, (_, _, args) => booleanDecrypter.Decrypt((int)args[0]));
 			}
 
 			if (decryptStrings) {
 				foreach (var info in stringDecrypter.DecrypterInfos) {
-					staticStringInliner.Add(info.method, (method2, gim, args) => {
-						return stringDecrypter.Decrypt(method2, (int)args[0]);
-					});
+					staticStringInliner.Add(info.method, (method2, _, args) => stringDecrypter.Decrypt(method2, (int)args[0]));
 				}
 				if (stringDecrypter.OtherStringDecrypter != null) {
-					staticStringInliner.Add(stringDecrypter.OtherStringDecrypter, (method2, gim, args) => {
-						return stringDecrypter.Decrypt((string)args[0]);
-					});
+					staticStringInliner.Add(stringDecrypter.OtherStringDecrypter, (_, _, args) => stringDecrypter.Decrypt((string)args[0]));
+				}
+			}
+			// Register generic decrypter methods with both string and constant inliners.
+			// Method<string>(...) calls are handled by the string inliner; non-string calls
+			// (Method<int[]>(...), Method<float[]>(...), etc.) by the constant inliner.
+			if (genericConstantDecrypter.Initialized) {
+				genericConstantInliner = new GenericConstantInliner(module, initializedDataCreator);
+				foreach (var dm in genericConstantDecrypter.DecrypterMethods) {
+					staticStringInliner.Add(dm.method, (method2, _, args) => genericConstantDecrypter.Decrypt(method2, (int)args[0]));
+					genericConstantInliner.Add(dm.method, (method2, gim, args) => genericConstantDecrypter.DecryptConstant(method2, gim, (int)args[0]));
 				}
 			}
 			DeobfuscatedFile.StringDecryptersAdded();
@@ -670,6 +689,44 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			}
 		}
 
+		/// <summary>
+		///     Write out anything Costura.Fody packed into this assembly's resources.
+		/// </summary>
+		/// <remarks>
+		///     Costura hosts are common under every obfuscator, and the dependencies inside one are
+		///     usually protected too, so getting them out is what makes them deobfuscatable at all --
+		///     otherwise they are just opaque resources that never reach a deobfuscator.
+		///
+		///     The resources and the resolver hook are left in place. Removing them would leave the
+		///     host looking for dependencies that are no longer there, and whether it is still meant to
+		///     run is the caller's decision rather than a side effect of extraction.
+		/// </remarks>
+		void DumpCosturaAssemblies() {
+			var costura = new CosturaDumper(module);
+			if (!costura.Detected)
+				return;
+
+			Logger.n("Costura: extracting {0} embedded assembly/assemblies", costura.Files.Count);
+			Logger.Instance.Indent();
+			foreach (var file in costura.Files) {
+				// One bad payload must not take the host down with it. The MZ check upstream is a
+				// sanity test, not a validity proof -- a truncated or mis-detected resource still
+				// reaches here -- and failing to write a dependency is a far smaller loss than
+				// aborting the deobfuscation of the assembly that contained it.
+				try {
+					DeobfuscatedFile.CreateAssemblyFile(file.data,
+						Win32Path.GetFileNameWithoutExtension(file.filename),
+						Win32Path.GetExtension(file.filename));
+					Logger.v("Costura: {0}", Utils.RemoveNewlines(file.filename));
+				}
+				catch (Exception ex) {
+					Logger.w("Costura: could not write {0} ({1}); skipping it and continuing",
+						Utils.RemoveNewlines(file.filename), ex.GetType().Name);
+				}
+			}
+			Logger.Instance.DeIndent();
+		}
+
 		public override void DeobfuscateEnd() {
 			FreePEImage();
 			RemoveProxyDelegates(proxyCallFixer, false);
@@ -687,8 +744,108 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 				Logger.v("Could not remove decrypter type");
 
 			FixEntryPoint();
+			CleanDisplayClasses();
+			FixFakeInstanceStubs();
+			RemoveOpaquePredicates();
+			VerifyStateMachines();
 
 			base.DeobfuscateEnd();
+		}
+
+		/// <summary>
+		///     Drop the dead opaque-predicate pairs Reactor injects into most types. See
+		///     <see cref="OpaquePredicateRemover" /> for the shape and for why removal is gated as
+		///     tightly as it is.
+		/// </summary>
+		void RemoveOpaquePredicates() {
+			var remover = new OpaquePredicateRemover(module, GetMethodsToRemove());
+			remover.Find();
+			if (remover.Count == 0)
+				return;
+			AddFieldsToBeRemoved(remover.Fields, "Opaque predicate backing field");
+			AddMethodsToBeRemoved(remover.Predicates, "Opaque predicate");
+		}
+
+		/// <summary>
+		///     Gate 5: trace every dispatch state machine in the output and report the ones that
+		///     never reach an exit.
+		///
+		///     This is the only gate that can see a dispatch resolved to the WRONG target. Such a
+		///     method is fully verifiable, has a balanced stack, is not empty, and still contains a
+		///     reachable ret -- reachable as a switch target that no state value ever selects. It just
+		///     loops forever, and in the decompiled output it silently looks like a SHORTER method,
+		///     because every statement past the mis-resolved edge is unreachable.
+		///
+		///     Reports rather than rewrites: a finding here means an earlier pass produced wrong
+		///     output, so the fix belongs in that pass. Surfacing it is what makes the bug class
+		///     visible at all instead of only downstream in a decompiler.
+		/// </summary>
+		void VerifyStateMachines() {
+			int loops = 0, undecidable = 0, exitReachable = 0;
+			foreach (var type in module.GetTypes()) {
+				foreach (var method in type.Methods) {
+					if (!method.HasBody || method.Body.Instructions.Count == 0)
+						continue;
+					bool hasSwitch = false;
+					foreach (var instr in method.Body.Instructions) {
+						if (instr.OpCode.Code == Code.Switch) { hasSwitch = true; break; }
+					}
+					if (!hasSwitch)
+						continue;
+
+					StateMachineTrace trace;
+					try {
+						trace = StateMachineTracer.Trace(new Blocks(method), method);
+					}
+					catch {
+						continue; // never let a diagnostic break the run
+					}
+
+					switch (trace.Verdict) {
+					case StateMachineVerdict.Loops:
+						loops++;
+						Logger.Instance.Log(false, null, LoggerEvent.Warning,
+						"Non-terminating dispatch in {0} (states {1}) -- a switch was resolved to "
+							+ "the wrong target, so statements past it are unreachable and absent from the "
+							+ "output", Utils.RemoveNewlines(method), string.Join(" -> ", trace.States));
+						break;
+					case StateMachineVerdict.ExitReachable:
+						exitReachable++;
+						break;
+					default:
+						undecidable++;
+						break;
+					}
+				}
+			}
+			// Reported at normal verbosity even when it finds nothing, on purpose: a gate that goes
+			// silent on success cannot be told apart from a gate that did not run, and "no warning"
+			// then reads as "zero non-terminating machines" to anything scraping this output.
+			if (loops > 0)
+				Logger.w("State-machine trace: {0} non-terminating, {1} exit-reachable, {2} undecidable",
+					loops, exitReachable, undecidable);
+			else
+				Logger.n("State-machine trace: 0 non-terminating, {0} exit-reachable, {1} undecidable",
+					exitReachable, undecidable);
+		}
+
+		// Must run after ProxyCallFixer: the fake-instance stubs only become recognizable once their
+		// proxy dispatcher call has been resolved back to the real target method.
+		void FixFakeInstanceStubs() {
+			var fixer = new FakeInstanceStubFixer(module);
+			int count = fixer.Fix();
+			if (count > 0) {
+				Logger.v("Converted {0} fake-instance proxy stub(s) to static", count);
+				foreach (var method in fixer.FixedMethods)
+					Logger.v("  {0}", Utils.RemoveNewlines(method));
+			}
+		}
+
+		void CleanDisplayClasses() {
+			var cleaner = new DisplayClassCleaner(module);
+			cleaner.Find();
+			AddFieldsToBeRemoved(cleaner.FieldsToRemove, "Reactor-injected DisplayClass static field");
+			AddMethodsToBeRemoved(cleaner.MethodsToRemove, "Reactor-injected DisplayClass null-check method");
 		}
 
 		void FixEntryPoint() {
@@ -712,12 +869,16 @@ namespace de4dot.code.deobfuscators.dotNET_Reactor.v4 {
 			FindAndRemoveInlinedMethods();
 		}
 
+		/// <summary>
+		/// Returns metadata tokens for all string decrypter methods (both standard and generic).
+		/// Used by the DynamicStringInliner to register methods with the AssemblyData subprocess,
+		/// and by the pipeline to know which methods should be treated as string decrypters.
+		/// </summary>
 		public override IEnumerable<int> GetStringDecrypterMethods() {
-			var list = new List<int>();
-			foreach (var info in stringDecrypter.DecrypterInfos)
-				list.Add(info.method.MDToken.ToInt32());
+			var list = stringDecrypter.DecrypterInfos.Select(info => info.method.MDToken.ToInt32()).ToList();
 			if (stringDecrypter.OtherStringDecrypter != null)
 				list.Add(stringDecrypter.OtherStringDecrypter.MDToken.ToInt32());
+			list.AddRange(genericConstantDecrypter.DecrypterMethods.Select(dm => dm.method.MDToken.ToInt32()));
 			return list;
 		}
 
