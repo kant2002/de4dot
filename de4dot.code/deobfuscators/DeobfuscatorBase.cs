@@ -19,15 +19,17 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using dnlib.DotNet.Writer;
 using dnlib.PE;
 using de4dot.blocks;
 using de4dot.blocks.cflow;
+using de4dot.code;
 
 namespace de4dot.code.deobfuscators {
-	public abstract class DeobfuscatorBase : IDeobfuscator, IModuleWriterListener {
+	public abstract class DeobfuscatorBase : IDeobfuscator, IStringDecrypterMethodInfoProvider, IModuleWriterListener {
 		public const string DEFAULT_VALID_NAME_REGEX = @"^[a-zA-Z_<{$][a-zA-Z_0-9<>{}$.`-]*$";
 		public const string DEFAULT_ASIAN_VALID_NAME_REGEX = @"^[\u2E80-\u9FFFa-zA-Z_<{$][\u2E80-\u9FFFa-zA-Z_0-9<>{}$.`-]*$";
 
@@ -241,6 +243,10 @@ namespace de4dot.code.deobfuscators {
 		}
 
 		public abstract IEnumerable<int> GetStringDecrypterMethods();
+
+		public virtual IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos() {
+			return GetStringDecrypterMethods().Select(token => new StringDecrypterMethodInfo(token));
+		}
 
 		class MethodCallRemover {
 			Dictionary<string, MethodDefAndDeclaringTypeDict<bool>> methodNameInfos = new Dictionary<string, MethodDefAndDeclaringTypeDict<bool>>();

@@ -22,7 +22,7 @@ using System.Diagnostics;
 using dnlib.DotNet.Emit;
 
 namespace de4dot.blocks.cflow {
-	class BlockCflowDeobfuscator : BlockDeobfuscator, IBranchHandler {
+	class BlockCflowDeobfuscator : BlockDeobfuscator, IBranchHandler, ISwitchDispatchResolver {
 		Block? block;
 		InstructionEmulator instructionEmulator;
 		BranchEmulator branchEmulator;
@@ -71,8 +71,18 @@ namespace de4dot.blocks.cflow {
 			block.ReplaceBccWithBranch(isTaken);
 		}
 
+		/// <summary>
+		///     Folding a <c>switch</c> whose operand this pass computed is dispatch resolution too, so
+		///     it has to answer to the same switch. Without this the "unresolved" candidate built by
+		///     the caller comes out byte-identical to the resolved one and the selection reports a
+		///     save it never made.
+		/// </summary>
+		public bool SuppressDispatchResolution { get; set; }
+
 		bool IBranchHandler.HandleSwitch(Int32Value switchIndex) {
 			Debug.Assert(block != null);
+			if (SuppressDispatchResolution)
+				return false;
 			var target = CflowUtils.GetSwitchTarget(block.Targets, block.FallThrough, switchIndex);
 			if (target == null)
 				return false;
