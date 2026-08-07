@@ -5,7 +5,11 @@
   <ItemGroup>
     <PackageVersion Include="AndreasDorfer.FsCheck.MSTest" Version="3.0.0" />
     <PackageVersion Include="dnlib" Version="4.5.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.2.0" />
+    <PackageVersion Include="MSTest.Analyzers" Version="4.3.3" />
+    <PackageVersion Include="MSTest.TestAdapter" Version="4.3.3" />
+    <PackageVersion Include="MSTest.TestFramework" Version="4.3.3" />
     <PackageVersion Include="System.Drawing.Common" Version="10.0.7" />
   </ItemGroup>
 </Project>
