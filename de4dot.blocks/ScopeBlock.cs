@@ -51,6 +51,49 @@ namespace de4dot.blocks {
 
 		public List<ScopeBlock> GetAllScopeBlocks() => GetTheBlocks(new List<ScopeBlock>());
 
+		/// <summary>
+		///     The first <see cref="Block"/> in this scope, i.e. the one control enters it at, or null
+		///     if the scope holds no blocks at all.
+		/// </summary>
+		public Block? GetFirstBlock() {
+			foreach (var bb in GetBaseBlocks()) {
+				if (bb is Block block)
+					return block;
+				if (bb is ScopeBlock scopeBlock) {
+					var first = scopeBlock.GetFirstBlock();
+					if (first != null)
+						return first;
+				}
+			}
+			return null;
+		}
+
+		/// <summary>
+		///     Adds the entry block of every exception handler protecting <paramref name="baseBlock"/>
+		///     to <paramref name="entryBlocks"/>, walking outwards through nested try blocks.
+		///
+		///     A reachability walk that only follows <c>Targets</c>/<c>FallThrough</c> never enters a
+		///     handler: a <see cref="TryBlock"/> keeps its handlers in
+		///     <see cref="TryBlock.TryHandlerBlocks"/>, which is not part of the
+		///     <see cref="BaseBlocks"/> the ordinary traversal descends into, and no branch may
+		///     transfer into a handler either. So a handler is reachable exactly when its protected
+		///     region is, and this is how such a walk discovers that.
+		/// </summary>
+		public static void AddProtectingHandlerEntryBlocks(BaseBlock? baseBlock, List<Block> entryBlocks) {
+			for (var parent = baseBlock?.Parent; parent != null; parent = parent.Parent) {
+				if (parent is not TryBlock tryBlock)
+					continue;
+				foreach (var handler in tryBlock.TryHandlerBlocks) {
+					var filterEntry = handler.FilterHandlerBlock.GetFirstBlock();
+					if (filterEntry != null)
+						entryBlocks.Add(filterEntry);
+					var handlerEntry = handler.HandlerBlock.GetFirstBlock();
+					if (handlerEntry != null)
+						entryBlocks.Add(handlerEntry);
+				}
+			}
+		}
+
 		public List<T> GetTheBlocks<T>(List<T> list) where T : BaseBlock {
 			AddBlocks(list, this);
 			return list;
