@@ -55,7 +55,7 @@ namespace de4dot.blocks {
 		///     The first <see cref="Block"/> in this scope, i.e. the one control enters it at, or null
 		///     if the scope holds no blocks at all.
 		/// </summary>
-		public Block? GetFirstBlock() {
+		private Block? GetFirstBlock() {
 			foreach (var bb in GetBaseBlocks()) {
 				if (bb is Block block)
 					return block;
