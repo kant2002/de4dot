@@ -79,7 +79,7 @@ namespace de4dot.blocks {
 		///     transfer into a handler either. So a handler is reachable exactly when its protected
 		///     region is, and this is how such a walk discovers that.
 		/// </summary>
-		public static void AddProtectingHandlerEntryBlocks(BaseBlock? baseBlock, List<Block> entryBlocks) {
+		internal static void AddProtectingHandlerEntryBlocks(BaseBlock? baseBlock, List<Block> entryBlocks) {
 			for (var parent = baseBlock?.Parent; parent != null; parent = parent.Parent) {
 				if (parent is not TryBlock tryBlock)
 					continue;
