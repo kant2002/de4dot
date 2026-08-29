@@ -27,7 +27,7 @@ using de4dot.blocks;
 using de4dot.blocks.cflow;
 
 namespace de4dot.code.deobfuscators {
-	public abstract class DeobfuscatorBase : IDeobfuscator, IModuleWriterListener {
+	public abstract class DeobfuscatorBase : IDeobfuscator, IStringDecrypterMethodInfoProvider, IModuleWriterListener {
 		public const string DEFAULT_VALID_NAME_REGEX = @"^[a-zA-Z_<{$][a-zA-Z_0-9<>{}$.`-]*$";
 		public const string DEFAULT_ASIAN_VALID_NAME_REGEX = @"^[\u2E80-\u9FFFa-zA-Z_<{$][\u2E80-\u9FFFa-zA-Z_0-9<>{}$.`-]*$";
 
@@ -241,6 +241,13 @@ namespace de4dot.code.deobfuscators {
 		}
 
 		public abstract IEnumerable<int> GetStringDecrypterMethods();
+
+		// Not virtual: GetStringDecrypterMethods is the extensibility point a derived deobfuscator
+		// overrides, and every info this produces is derived from it.
+		public IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos() {
+			foreach (int token in GetStringDecrypterMethods())
+				yield return new StringDecrypterMethodInfo(token);
+		}
 
 		class MethodCallRemover {
 			Dictionary<string, MethodDefAndDeclaringTypeDict<bool>> methodNameInfos = new Dictionary<string, MethodDefAndDeclaringTypeDict<bool>>();
