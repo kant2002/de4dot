@@ -12,7 +12,8 @@
       "de4dot.cui\\de4dot.cui.csproj",
       "de4dot.mcp\\de4dot.mcp.csproj",
       "de4dot.mdecrypt\\de4dot.mdecrypt.csproj",
-      "de4dot\\de4dot.csproj"
+      "de4dot\\de4dot.csproj",
+      "tests\\de4dot.Tests\\de4dot.Tests.csproj"
     ]
   }
 }

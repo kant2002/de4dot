@@ -32,4 +32,5 @@
   <Project Path="de4dot/de4dot.csproj" />
   <Project Path="Test.Rename.Dll/Test.Rename.Dll.csproj" />
   <Project Path="Test.Rename/Test.Rename.csproj" />
+  <Project Path="tests/de4dot.Tests/de4dot.Tests.csproj" Condition="$(TargetFramework) != 'net48'" />
 </Solution>
