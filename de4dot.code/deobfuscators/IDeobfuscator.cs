@@ -24,6 +24,7 @@ using dnlib.DotNet;
 using dnlib.DotNet.Writer;
 using de4dot.blocks;
 using de4dot.blocks.cflow;
+using de4dot.code;
 using de4dot.code.renamer;
 
 namespace de4dot.code.deobfuscators {
@@ -105,5 +106,6 @@ namespace de4dot.code.deobfuscators {
 
 		// Returns all string decrypter method tokens
 		IEnumerable<int> GetStringDecrypterMethods();
+		IEnumerable<StringDecrypterMethodInfo> GetStringDecrypterMethodInfos();
 	}
 }

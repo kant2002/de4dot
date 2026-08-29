@@ -54,13 +54,38 @@ namespace de4dot.blocks.cflow {
 			ourBlocksDeobfuscators.Add(new DupBlockCflowDeobfuscator { ExecuteIfNotModified = true });
 		}
 
+		/// <summary>
+		///     Run every pass as usual, but with switch-dispatch redirection turned off. Toggled around
+		///     one method at a time to produce the unresolved sibling candidate — see
+		///     <see cref="ISwitchDispatchResolver"/> for why that candidate has to exist.
+		/// </summary>
+		public bool SuppressDispatchResolution {
+			get => suppressDispatchResolution;
+			set {
+				suppressDispatchResolution = value;
+				Propagate(ourBlocksDeobfuscators);
+				Propagate(userBlocksDeobfuscators);
+			}
+		}
+		bool suppressDispatchResolution;
+
+		void Propagate(IEnumerable<IBlocksDeobfuscator> bds) {
+			foreach (var bd in bds) {
+				if (bd is ISwitchDispatchResolver resolver)
+					resolver.SuppressDispatchResolution = suppressDispatchResolution;
+			}
+		}
+
 		public void Add(IEnumerable<IBlocksDeobfuscator> blocksDeobfuscators) {
 			foreach (var bd in blocksDeobfuscators)
 				Add(bd);
 		}
 
 		public void Add(IBlocksDeobfuscator blocksDeobfuscator) {
-			if (blocksDeobfuscator != null)
+			if (blocksDeobfuscator == null)
+				return;
+			if (blocksDeobfuscator is ISwitchDispatchResolver resolver)
+				resolver.SuppressDispatchResolution = suppressDispatchResolution;
 				userBlocksDeobfuscators.Add(blocksDeobfuscator);
 		}
 
