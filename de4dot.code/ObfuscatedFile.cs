@@ -456,30 +456,36 @@ namespace de4dot.code {
 
 		void UpdateDynamicStringInliner() {
 			if (dynamicStringInliner != null)
-				dynamicStringInliner.Initialize(GetMethodTokens());
+				dynamicStringInliner.Initialize(GetMethodInfos());
 		}
 
-		IEnumerable<int> GetMethodTokens() {
-			if (!userStringDecrypterMethods)
-				return deob.GetStringDecrypterMethods();
+		IEnumerable<StringDecrypterMethodInfo> GetMethodInfos() {
+			if (!userStringDecrypterMethods) {
+				// A deobfuscator that does not provide the richer form is not broken, just older --
+				// wrap its tokens. See IStringDecrypterMethodInfoProvider for why this is a test
+				// rather than a member on IDeobfuscator.
+				if (deob is IStringDecrypterMethodInfoProvider provider)
+					return provider.GetStringDecrypterMethodInfos();
+				return deob.GetStringDecrypterMethods().Select(token => new StringDecrypterMethodInfo(token));
+			}
 
-			var tokens = new List<int>();
+			var infos = new List<StringDecrypterMethodInfo>();
 
 			foreach (var val in options.StringDecrypterMethods) {
 				var tokenStr = val.Trim();
 				if (Utils.StartsWith(tokenStr, "0x", StringComparison.OrdinalIgnoreCase))
 					tokenStr = tokenStr.Substring(2);
 				if (int.TryParse(tokenStr, NumberStyles.HexNumber, null, out int methodToken))
-					tokens.Add(methodToken);
+					infos.Add(new StringDecrypterMethodInfo(methodToken));
 				else
-					tokens.AddRange(FindMethodTokens(val));
+					infos.AddRange(FindMethodInfos(val));
 			}
 
-			return tokens;
+			return infos;
 		}
 
-		IEnumerable<int> FindMethodTokens(string methodDesc) {
-			var tokens = new List<int>();
+		IEnumerable<StringDecrypterMethodInfo> FindMethodInfos(string methodDesc) {
+			var infos = new List<StringDecrypterMethodInfo>();
 
 			SplitMethodDesc(methodDesc, out string typeString, out string methodName, out var argsStrings);
 
@@ -509,11 +515,11 @@ namespace de4dot.code {
 					}
 
 					Logger.v("Adding string decrypter; token: {0:X8}, method: {1}", method.MDToken.ToInt32(), Utils.RemoveNewlines(method.FullName));
-					tokens.Add(method.MDToken.ToInt32());
+					infos.Add(new StringDecrypterMethodInfo(method.MDToken.ToInt32()));
 				}
 			}
 
-			return tokens;
+			return infos;
 		}
 
 		static void SplitMethodDesc(string methodDesc, out string type, out string name, out string[] args) {

@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using dnlib.DotNet;
 using dnlib.DotNet.Emit;
 using de4dot.code.AssemblyClient;
@@ -79,12 +80,20 @@ namespace de4dot.code {
 
 		public DynamicStringInliner(IAssemblyClient assemblyClient) => this.assemblyClient = assemblyClient;
 
-		public void Initialize(IEnumerable<int> methodTokens) {
+		/// <summary>
+		///     Kept so existing callers still compile and bind. <c>DynamicStringInliner</c> is public
+		///     API, and the richer overload conveys nothing this one does not until
+		///     <see cref="StringDecrypterMethodInfo"/> carries more than a token.
+		/// </summary>
+		public void Initialize(IEnumerable<int> methodTokens) =>
+			Initialize(methodTokens.Select(token => new StringDecrypterMethodInfo(token)));
+
+		public void Initialize(IEnumerable<StringDecrypterMethodInfo> methodInfos) {
 			methodTokenToId.Clear();
-			foreach (var methodToken in methodTokens) {
-				if (methodTokenToId.ContainsKey(methodToken))
+			foreach (var info in methodInfos) {
+				if (methodTokenToId.ContainsKey(info.MethodToken))
 					continue;
-				methodTokenToId[methodToken] = assemblyClient.StringDecrypterService.DefineStringDecrypter(methodToken);
+				methodTokenToId[info.MethodToken] = assemblyClient.StringDecrypterService.DefineStringDecrypter(info.MethodToken);
 			}
 		}
 
