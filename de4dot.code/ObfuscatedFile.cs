@@ -563,7 +563,11 @@ namespace de4dot.code {
 
 		public void DeobfuscateEnd() {
 			foreach (var m in inlineCandidate) {
-				m.Value.DeclaringType.Remove(m.Value);
+				if (m.Value.DeclaringType != null) {
+					m.Value.DeclaringType.Remove(m.Value);
+				} else {
+					Logger.w(m + " has no DeclaringType.");
+				}
 			}
 
 			DeobfuscateCleanUp();
