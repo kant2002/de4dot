@@ -562,7 +562,20 @@ namespace de4dot.code {
 		}
 
 		public void DeobfuscateEnd() {
+			// Remove a candidate only if it is still attached and no remaining body references it
+			// (calls that were not inlined, ldftn for delegates, etc.).
+			var stillReferenced = new HashSet<MethodDef>();
+			foreach (var method in GetAllMethods()) {
+				if (!method.HasBody || !method.Body.HasInstructions)
+					continue;
+				foreach (var instr in method.Body.Instructions) {
+					if (instr.Operand is IMethod im && im.ResolveMethodDef() is MethodDef md)
+						stillReferenced.Add(md);
+				}
+			}
 			foreach (var m in inlineCandidate) {
+				if (m.Value.DeclaringType is null || stillReferenced.Contains(m.Value))
+					continue;
 				m.Value.DeclaringType.Remove(m.Value);
 			}
 
